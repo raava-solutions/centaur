@@ -1,0 +1,9 @@
+[project]
+name = "raava-gbrain"
+description = "Raava gbrain grounding for roster, roles, and decisions"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["httpx>=0.28.0"]
+
+[tool.centaur]
+module = "client.py"

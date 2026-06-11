@@ -1,0 +1,9 @@
+[project]
+name = "vera"
+description = "Raava design systems and product experience lead"
+version = "0.1.0"
+
+[tool.centaur]
+type = "persona"
+engine = "codex"
+prompt = "PROMPT.md"

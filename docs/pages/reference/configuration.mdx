@@ -159,6 +159,7 @@ Sandbox entrypoint and wrappers:
 | `WORKFLOW_RECONCILE_INTERVAL_S`, `WORKFLOW_RESUSPEND_BACKOFF_S` | `api.extraEnv`. | Workflow claim/reclaim cadence. |
 | `WORKFLOW_SCHEDULE_TICK_INTERVAL_S`, `WORKFLOW_SCHEDULE_CATCHUP_LIMIT`, `WORKFLOW_SCHEDULE_MISFIRE_GRACE_S` | `api.extraEnv`. | Scheduled workflow timing and catch-up behavior. |
 | `MY_THREAD_KEY`, `<WORKFLOW_NAME>_THREAD_KEY`, `<WORKFLOW_NAME>_SLACK_CHANNEL` | Workflow-specific env. | Fallback thread/channel targets for workflow agent steps. |
+| `RAAVA_CENTAUR_CHANNEL_DEFAULTS` | `api.extraEnv` when using the Raava overlay. | JSON object or comma list mapping Slack channel IDs or names to approved Raava function leads. |
 | `<WEBHOOK_SECRET_REF>` | API env or Secret named by a workflow `WebhookSpec`. | HMAC secret for public workflow webhooks, for example `GITHUB_WEBHOOK_SECRET`. |
 
 Slack ETL workflows:
@@ -191,3 +192,8 @@ Slack ETL workflows:
 | `CENTAUR_OVERLAY_HOST_DIR`, `CENTAUR_OVERLAY_DIR` | Local shell. | Overlay migration wrapper targets. |
 | `CENTAUR_API_URL`, `CENTAUR_API_KEY` | Local shell. | API target/key for contrib scripts. |
 | `MUESLI_CLI`, `MUESLI_HOST`, `MUESLI_PUSH_LOG`, `MUESLI_SLACK_CHANNEL` | Local shell. | Muesli meeting ingest helper behavior. |
+
+For local Raava overlay dogfood, set `TOOL_DIRS` and `WORKFLOW_DIRS` to include
+`overlays/raava-internal/tools` and `overlays/raava-internal/workflows`. See
+`overlays/raava-internal/README.md` for Docker, direct workflow, and Slack CLI
+smoke checks.
