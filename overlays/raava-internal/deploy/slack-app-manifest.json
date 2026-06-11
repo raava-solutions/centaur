@@ -27,7 +27,7 @@
   },
   "settings": {
     "event_subscriptions": {
-      "request_url": "https://iwp-centaur.raava.dev/api/webhooks/slack",
+      "request_url": "https://centaur.raava.dev/api/webhooks/slack",
       "bot_events": [
         "app_mention",
         "message.channels",

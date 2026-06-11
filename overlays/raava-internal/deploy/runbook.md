@@ -10,6 +10,8 @@ the overlay without pushing Raava-specific work to upstream Centaur.
 - Deploy values: `overlays/raava-internal/deploy/values.raava-local.yaml`
 - Slack app manifest:
   `overlays/raava-internal/deploy/slack-app-manifest.json`
+- Cloudflare tunnel manifest:
+  `overlays/raava-internal/deploy/cloudflared-centaur.yaml`
 
 If `git remote -v` shows `origin` as `github.com/paradigmxyz/centaur.git`, do
 not push this branch to `origin`. Publish via a Raava-owned overlay repo or fork.
@@ -45,7 +47,7 @@ A real Slack deployment requires:
 - `SLACKBOT_API_KEY`
 - `DATABASE_URL` or the chart-managed Postgres secret
 - Kubernetes context plus Helm
-- Active Cloudflare tunnel for `iwp-centaur.raava.dev`
+- Active Cloudflare tunnel for `centaur.raava.dev`
 
 Do not invent placeholder production secrets. The Slackbot health route can run
 without them, but real Slack events require the app signing secret and bot token.
@@ -141,28 +143,75 @@ curl -fsS -X POST http://127.0.0.1:18000/workflows/runs \
 Slack currently targets:
 
 ```text
-https://iwp-centaur.raava.dev/api/webhooks/slack
+https://centaur.raava.dev/api/webhooks/slack
 ```
 
-If Slack receives Cloudflare 1033/530, the DNS route exists but the named
-tunnel has no active connector. Start the existing tunnel after the Slackbot is
-reachable locally or in-cluster:
+DNS should route `centaur.raava.dev` to the `iwp-centaur` Cloudflare tunnel.
+The current tunnel id is `de4cf7c8-e63d-4e99-98ee-bb001bd24695`.
+
+Create the in-cluster tunnel credentials secret from the local Cloudflare
+credentials file before applying the tunnel manifest:
 
 ```bash
 cloudflared tunnel info iwp-centaur
-cloudflared tunnel run iwp-centaur
+cloudflared tunnel route dns --overwrite-dns iwp-centaur centaur.raava.dev
+kubectl -n centaur create secret generic centaur-cloudflared-credentials \
+  --from-file=credentials.json="$HOME/.cloudflared/de4cf7c8-e63d-4e99-98ee-bb001bd24695.json" \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -f overlays/raava-internal/deploy/cloudflared-centaur.yaml
+kubectl rollout status -n centaur deploy/centaur-cloudflared --timeout=120s
 ```
 
 Then verify:
 
 ```bash
-curl -fsS https://iwp-centaur.raava.dev/health
+curl -fsS https://centaur.raava.dev/health
 ```
 
 ## Slack App
 
+Slack app:
+
+- App ID: `A0B9VET4RKP`
+- Workspace: `zapgroup-workspace`
+- Team ID: `T08TZCX83UJ`
+- Events URL: `https://centaur.raava.dev/api/webhooks/slack`
+
 Apply or verify the manifest in
-`overlays/raava-internal/deploy/slack-app-manifest.json`.
+`overlays/raava-internal/deploy/slack-app-manifest.json`:
+
+```bash
+slack app link --team T08TZCX83UJ --app A0B9VET4RKP \
+  --environment deployed --skip-update --force
+slack manifest validate --team T08TZCX83UJ --source local --skip-update
+slack app install --team T08TZCX83UJ --skip-update --force
+slack app list --team T08TZCX83UJ --skip-update
+```
+
+The local Slack CLI project uses `.slack/hooks.json` to return the overlay
+manifest. Keep that hook tolerant of extra Slack CLI hook arguments.
+
+After installation, update Kubernetes with the Bot User OAuth Token and signing
+secret, then restart the API and Slackbot:
+
+```bash
+kubectl -n centaur patch secret centaur-infra-env --type=json -p='[
+  {"op":"replace","path":"/data/SLACK_BOT_TOKEN","value":"<base64-xoxb-token>"},
+  {"op":"replace","path":"/data/SLACK_SIGNING_SECRET","value":"<base64-signing-secret>"}
+]'
+kubectl rollout restart -n centaur deploy/centaur-centaur-api deploy/centaur-centaur-slackbot
+kubectl rollout status -n centaur deploy/centaur-centaur-api --timeout=180s
+kubectl rollout status -n centaur deploy/centaur-centaur-slackbot --timeout=180s
+```
+
+Verify the public webhook path accepts Slack-signed traffic:
+
+```bash
+curl -fsS https://centaur.raava.dev/health
+# Generate a Slack v0 HMAC signature with SLACK_SIGNING_SECRET, then POST a
+# url_verification payload to /api/webhooks/slack and confirm the challenge is
+# echoed back.
+```
 
 After the app is installed in the Raava workspace:
 
