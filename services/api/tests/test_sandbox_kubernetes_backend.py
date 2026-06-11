@@ -276,6 +276,20 @@ def test_container_env_includes_firewall_host_for_secret_bootstrap(
     assert env_map["no_proxy"] == env_map["NO_PROXY"]
 
 
+def test_container_env_omits_openai_stub_when_codex_oauth_secret_is_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
+    monkeypatch.setenv("KUBERNETES_CODEX_AUTH_SECRET_NAME", "centaur-codex-auth")
+
+    env = sandbox_container_env("thread-key", "sandbox-id", "firewall.internal")
+    env_map = dict(item.split("=", 1) for item in env)
+
+    assert "OPENAI_API_KEY" not in env_map
+    assert env_map["AMP_API_KEY"] == "AMP_API_KEY"
+    assert env_map["ANTHROPIC_API_KEY"] == "ANTHROPIC_API_KEY"
+
+
 def test_container_env_passes_allowed_otel_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -618,6 +632,63 @@ async def test_create_builds_pod_and_prompt_secret(
         mount["name"] == "overlay-root" and mount["mountPath"] == "/home/agent/overlay"
         for mount in container["volumeMounts"]
     )
+
+
+@pytest.mark.asyncio
+async def test_create_mounts_codex_auth_secret_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = KubernetesExecutorBackend()
+    fake_core = FakeCoreApi()
+    fake_networking = FakeNetworkingApi()
+    backend._core = fake_core
+    backend._networking = fake_networking
+    monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
+    monkeypatch.setenv("FIREWALL_HOST", "firewall.internal")
+    monkeypatch.setenv("KUBERNETES_FIREWALL_CA_SECRET_NAME", "firewall-ca")
+    monkeypatch.setenv("KUBERNETES_NAMESPACE", "centaur-sandbox")
+    monkeypatch.setenv("KUBERNETES_CODEX_AUTH_SECRET_NAME", "centaur-codex-auth")
+    monkeypatch.setenv("KUBERNETES_CODEX_AUTH_SECRET_KEY", "auth.json")
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes._prompt_bundle", lambda persona: "prompt"
+    )
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes.container_env",
+        lambda *_args, **_kwargs: ["CENTAUR_API_URL=http://api.internal:8000"],
+    )
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes.build_harness_cmd", lambda *_args: ["codex-app-wrapper"]
+    )
+    monkeypatch.setattr("api.sandbox.kubernetes.image", lambda: "centaur-agent:test")
+
+    async def fake_ensure_clients() -> None:
+        return None
+
+    async def fake_wait_ready(_pod_name: str) -> float:
+        return 0.01
+
+    monkeypatch.setattr(backend, "_ensure_clients", fake_ensure_clients)
+    monkeypatch.setattr(backend, "_wait_pod_ready", fake_wait_ready)
+    monkeypatch.setattr(backend, "_wait_ready", fake_wait_ready)
+
+    await backend.create("slack:C123:123.456", "codex", "codex")
+
+    pod_body = fake_core.created_pods[1][1]
+    container = pod_body["spec"]["containers"][0]
+
+    assert {
+        "name": "codex-auth",
+        "mountPath": "/home/agent/.centaur-codex-auth",
+        "readOnly": True,
+    } in container["volumeMounts"]
+    assert {
+        "name": "codex-auth",
+        "secret": {
+            "secretName": "centaur-codex-auth",
+            "defaultMode": 0o555,
+            "items": [{"key": "auth.json", "path": "auth.json"}],
+        },
+    } in pod_body["spec"]["volumes"]
 
 
 @pytest.mark.asyncio

@@ -72,7 +72,13 @@ fi
 
 # ── Codex settings ──────────────────────────────────────────────────────────
 mkdir -p "$HOME_DIR/.codex"
-if [ ! -f "$HOME_DIR/.codex/auth.json" ] && [ -f /etc/centaur/codex-auth.default.json ]; then
+if [ -f "$HOME_DIR/.centaur-codex-auth/auth.json" ]; then
+    cp "$HOME_DIR/.centaur-codex-auth/auth.json" "$HOME_DIR/.codex/auth.json"
+    chmod 600 "$HOME_DIR/.codex/auth.json"
+elif [ -f /etc/centaur/codex-auth/auth.json ]; then
+    cp /etc/centaur/codex-auth/auth.json "$HOME_DIR/.codex/auth.json"
+    chmod 600 "$HOME_DIR/.codex/auth.json"
+elif [ -f /etc/centaur/codex-auth.default.json ]; then
     cp /etc/centaur/codex-auth.default.json "$HOME_DIR/.codex/auth.json"
     chmod 600 "$HOME_DIR/.codex/auth.json"
 fi

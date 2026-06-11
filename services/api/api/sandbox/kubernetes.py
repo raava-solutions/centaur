@@ -105,6 +105,46 @@ def _service_account_name() -> str | None:
     return value or None
 
 
+def _codex_auth_secret_name() -> str | None:
+    value = (os.getenv("KUBERNETES_CODEX_AUTH_SECRET_NAME") or "").strip()
+    return value or None
+
+
+def _codex_auth_secret_key() -> str:
+    return (os.getenv("KUBERNETES_CODEX_AUTH_SECRET_KEY") or "auth.json").strip()
+
+
+def _configure_codex_auth_volume(
+    volume_mounts: list[dict[str, Any]],
+    volumes: list[dict[str, Any]],
+) -> None:
+    codex_auth_secret = _codex_auth_secret_name()
+    if not codex_auth_secret:
+        return
+    volume_mounts.append(
+        {
+            "name": "codex-auth",
+            "mountPath": "/home/agent/.centaur-codex-auth",
+            "readOnly": True,
+        }
+    )
+    volumes.append(
+        {
+            "name": "codex-auth",
+            "secret": {
+                "secretName": codex_auth_secret,
+                "defaultMode": 0o555,
+                "items": [
+                    {
+                        "key": _codex_auth_secret_key(),
+                        "path": "auth.json",
+                    }
+                ],
+            },
+        }
+    )
+
+
 def _state_volume_enabled() -> bool:
     value = (os.getenv("KUBERNETES_SANDBOX_STATE_VOLUME_ENABLED") or "").strip().lower()
     return value in {"1", "true", "yes", "on"}
@@ -611,6 +651,7 @@ class KubernetesExecutorBackend(SandboxBackend):
         volume_mounts: list[dict[str, Any]],
         volumes: list[dict[str, Any]],
     ) -> None:
+        _configure_codex_auth_volume(volume_mounts, volumes)
         if _state_volume_enabled():
             raise ValueError(
                 "KUBERNETES_SANDBOX_STATE_VOLUME_ENABLED requires "

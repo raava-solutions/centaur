@@ -39,6 +39,10 @@ _CLAUDE_HARDENING_ENV = (
 )
 
 
+def _codex_oauth_secret_configured() -> bool:
+    return bool((os.getenv("KUBERNETES_CODEX_AUTH_SECRET_NAME") or "").strip())
+
+
 def _set_env(env: list[str], name: str, value: str) -> None:
     prefix = f"{name}="
     entry = f"{name}={value}"
@@ -132,7 +136,10 @@ def container_env(
     # Placeholder values for harness infra secrets. iron-proxy MITMs the
     # outbound TLS connection and rewrites these strings in auth headers
     # before they reach the real upstream.
-    for key in _HARNESS_STUB_KEYS:
+    stub_keys = list(_HARNESS_STUB_KEYS)
+    if _codex_oauth_secret_configured():
+        stub_keys.remove("OPENAI_API_KEY")
+    for key in stub_keys:
         env.append(f"{key}={key}")
     for key in _SANDBOX_PASSTHROUGH_ENV_KEYS:
         value = (os.getenv(key) or "").strip()

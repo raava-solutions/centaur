@@ -175,12 +175,15 @@ spec:
                 secretKeyRef:
                   name: {{ include "centaur.secretEnvName" . }}
                   key: {{ printf "%sSANDBOX_SIGNING_KEY" .Values.secretManager.envPrefix }}
+{{- $apiFirewallProxy := default (dict "enabled" true) .Values.api.firewallProxy }}
+{{- if ne $apiFirewallProxy.enabled false }}
             - name: HTTPS_PROXY
               value: {{ include "centaur.firewallProxyUrl" . | quote }}
             - name: REQUESTS_CA_BUNDLE
               value: /firewall-certs/ca-cert.pem
             - name: SSL_CERT_FILE
               value: /firewall-certs/ca-cert.pem
+{{- end }}
             - name: NO_PROXY
               value: {{ printf "localhost,127.0.0.1,%s,%s,%s,%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" (include "centaur.componentName" (dict "root" . "component" "postgres")) (include "centaur.componentName" (dict "root" . "component" "api")) (include "centaur.componentName" (dict "root" . "component" "slackbot")) (include "centaur.firewallNoProxyHosts" .) | quote }}
             - name: no_proxy
@@ -322,6 +325,14 @@ spec:
 {{- if .Values.sandbox.stateVolume.storageClassName }}
             - name: KUBERNETES_SANDBOX_STATE_VOLUME_STORAGE_CLASS
               value: {{ .Values.sandbox.stateVolume.storageClassName | quote }}
+{{- end }}
+{{- $sandboxCodexAuth := default dict .Values.sandbox.codexAuth }}
+{{- $codexAuthSecretName := default "" $sandboxCodexAuth.existingSecretName }}
+{{- if $codexAuthSecretName }}
+            - name: KUBERNETES_CODEX_AUTH_SECRET_NAME
+              value: {{ $codexAuthSecretName | quote }}
+            - name: KUBERNETES_CODEX_AUTH_SECRET_KEY
+              value: {{ default "auth.json" $sandboxCodexAuth.secretKey | quote }}
 {{- end }}
 {{- with .Values.sandbox.resources.limits }}
 {{- if and .cpu (not (hasKey $apiExtraEnv "KUBERNETES_SANDBOX_CPU_LIMIT")) }}
@@ -490,7 +501,8 @@ spec:
                   key: {{ printf "%sSLACKBOT_API_KEY" .Values.secretManager.envPrefix }}
             - name: CENTAUR_API_URL
               value: {{ printf "http://%s:8000" (include "centaur.componentName" (dict "root" . "component" "api")) | quote }}
-{{- if ne .Values.slackbot.firewallProxy.enabled false }}
+{{- $slackbotFirewallProxy := default (dict "enabled" true) .Values.slackbot.firewallProxy }}
+{{- if ne $slackbotFirewallProxy.enabled false }}
             - name: HTTPS_PROXY
               value: {{ include "centaur.firewallProxyUrl" . | quote }}
             - name: NODE_EXTRA_CA_CERTS

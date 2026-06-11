@@ -16,6 +16,20 @@ the overlay without pushing Raava-specific work to upstream Centaur.
 If `git remote -v` shows `origin` as `github.com/paradigmxyz/centaur.git`, do
 not push this branch to `origin`. Publish via a Raava-owned overlay repo or fork.
 
+## Runtime Topology
+
+The current Raava dogfood target is local Docker images running in a local Kind
+cluster, not GCP:
+
+- Kubernetes context: `kind-raava-centaur`
+- Kind cluster: `raava-centaur`
+- Namespace: `centaur`
+- Public URL: `https://centaur.raava.dev` through the in-cluster Cloudflare
+  tunnel
+
+Build images locally, load them into Kind, and deploy with Helm. GCP is not part
+of this path unless a future production plan explicitly changes the topology.
+
 ## Local Verification
 
 From the repo root:
@@ -59,14 +73,17 @@ directly. These values are placeholders and are not valid for live Slack:
 
 ```bash
 kubectl create namespace centaur --dry-run=client -o yaml | kubectl apply -f -
-openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
-  -subj '/CN=centaur-local-firewall' \
-  -keyout /tmp/centaur-firewall-ca.key \
+openssl genrsa -out /tmp/centaur-firewall-ca.key 4096
+openssl req -x509 -new -nodes -key /tmp/centaur-firewall-ca.key -sha256 -days 3650 \
+  -subj '/CN=centaur iron-proxy CA' \
+  -addext 'basicConstraints=critical,CA:TRUE' \
+  -addext 'keyUsage=critical,keyCertSign' \
   -out /tmp/centaur-firewall-ca.crt
 kubectl -n centaur create secret generic centaur-firewall-ca \
   --from-file=ca-cert.pem=/tmp/centaur-firewall-ca.crt \
   --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n centaur create secret generic centaur-firewall-ca-key \
+  --from-file=ca-cert.pem=/tmp/centaur-firewall-ca.crt \
   --from-file=ca-key.pem=/tmp/centaur-firewall-ca.key \
   --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n centaur create secret generic centaur-infra-env \
@@ -76,9 +93,24 @@ kubectl -n centaur create secret generic centaur-infra-env \
   --from-literal=SLACK_SIGNING_SECRET='local-signing-secret' \
   --from-literal=SLACKBOT_API_KEY='local-slackbot-key' \
   --from-literal=SANDBOX_SIGNING_KEY='local-sandbox-signing-key' \
+  --from-literal=IRON_MANAGEMENT_API_KEY="$(openssl rand -hex 32)" \
   --dry-run=client -o yaml | kubectl apply -f -
 rm -f /tmp/centaur-firewall-ca.key /tmp/centaur-firewall-ca.crt
 ```
+
+For Codex, use OAuth from the host Codex login. Do not rely on the baked
+placeholder API key in the sandbox image:
+
+```bash
+test -s "$HOME/.codex/auth.json"
+kubectl -n centaur create secret generic centaur-codex-auth \
+  --from-file=auth.json="$HOME/.codex/auth.json" \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+`values.raava-local.yaml` wires this secret through `sandbox.codexAuth`. When
+that value is set, sandbox pods must not receive `OPENAI_API_KEY`; that
+placeholder forces Codex into API-key mode and bypasses the mounted OAuth file.
 
 ## Deploy With Helm
 
@@ -87,6 +119,11 @@ Build the base images and overlay image:
 ```bash
 just build
 docker build -t raava-centaur-overlay:local overlays/raava-internal
+kind load docker-image centaur-api:latest --name raava-centaur
+kind load docker-image centaur-slackbot:latest --name raava-centaur
+kind load docker-image centaur-agent:latest --name raava-centaur
+kind load docker-image centaur-iron-proxy:latest --name raava-centaur
+kind load docker-image raava-centaur-overlay:local --name raava-centaur
 ```
 
 Bootstrap Kubernetes secrets from the shell environment:
@@ -115,6 +152,31 @@ kubectl exec -n centaur deploy/centaur-centaur-api -- \
   sh -lc 'echo "$TOOL_DIRS"; echo "$WORKFLOW_DIRS"; ls -la /app/overlay/org'
 kubectl logs -n centaur deploy/centaur-centaur-slackbot --tail=100
 ```
+
+Run the end-to-end local smoke:
+
+```bash
+just smoke
+```
+
+Expected result: the JSON response has `"result_text": "PONG"`. If it is empty,
+check the active sandbox:
+
+```bash
+pod=$(kubectl -n centaur get pods -l centaur.ai/managed=true -o jsonpath='{.items[0].metadata.name}')
+kubectl -n centaur exec "$pod" -c sandbox -- sh -lc '
+  codex login status
+  if env | grep -q "^OPENAI_API_KEY="; then
+    echo "openai_api_key_env:present"
+  else
+    echo "openai_api_key_env:absent"
+  fi
+'
+```
+
+Expected result: `codex login status` reports ChatGPT, and
+`openai_api_key_env:absent` confirms the placeholder env var is not overriding
+OAuth.
 
 For a local smoke, the values file seeds `LOCAL_DEV_API_KEY` as
 `aiv2_raava_local_dev_admin_key`. Verify a Raava workflow can be enqueued:

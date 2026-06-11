@@ -11,6 +11,8 @@ overlay:
     sourcePath: /overlay
 
 api:
+  firewallProxy:
+    enabled: false
   executionWorkerEnabled: true
   pluginWatcherEnabled: true
   extraEnv:
@@ -42,5 +44,8 @@ tokenBroker:
   enabled: false
 
 sandbox:
+  codexAuth:
+    existingSecretName: centaur-codex-auth
+    secretKey: auth.json
   extraEnv:
     RAAVA_CENTAUR_PRODUCT: "internal-slack"
