@@ -1,0 +1,42 @@
+# Raava-owned local/dogfood values for the Centaur base chart.
+#
+# Keep this file in the overlay. Do not push Raava-specific deployment
+# configuration back to the upstream `paradigmxyz/centaur` chart defaults.
+
+overlay:
+  image:
+    repository: raava-centaur-overlay
+    tag: local
+    pullPolicy: IfNotPresent
+    sourcePath: /overlay
+
+api:
+  executionWorkerEnabled: true
+  pluginWatcherEnabled: true
+  extraEnv:
+    # Override per deployment with real Slack channel IDs.
+    RAAVA_CENTAUR_CHANNEL_DEFAULTS: "{}"
+    # Optional: set to hosted gbrain when available.
+    RAAVA_GBRAIN_BASE_URL: ""
+    # Local-only admin key for Kind smoke tests. Replace or remove outside dev.
+    LOCAL_DEV_API_KEY: "aiv2_raava_local_dev_admin_key"
+    # Docker Desktop and local clusters can take longer to create sandboxes.
+    KUBERNETES_SANDBOX_READY_TIMEOUT_S: "180"
+
+slackbot:
+  enabled: true
+  extraEnv:
+    # Optional: Slack channel ID for duplicate/runtime alerts.
+    RUNTIME_ERROR_ALERT_CHANNEL: ""
+
+ironProxy:
+  secretSource: environment
+  manager:
+    secretSource: environment
+
+tokenBroker:
+  enabled: false
+
+sandbox:
+  extraEnv:
+    RAAVA_CENTAUR_PRODUCT: "internal-slack"
