@@ -490,10 +490,12 @@ spec:
                   key: {{ printf "%sSLACKBOT_API_KEY" .Values.secretManager.envPrefix }}
             - name: CENTAUR_API_URL
               value: {{ printf "http://%s:8000" (include "centaur.componentName" (dict "root" . "component" "api")) | quote }}
+{{- if ne .Values.slackbot.firewallProxy.enabled false }}
             - name: HTTPS_PROXY
               value: {{ include "centaur.firewallProxyUrl" . | quote }}
             - name: NODE_EXTRA_CA_CERTS
               value: /firewall-certs/ca-cert.pem
+{{- end }}
             - name: NO_PROXY
               value: {{ printf "localhost,127.0.0.1,%s,%s,%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" (include "centaur.componentName" (dict "root" . "component" "postgres")) (include "centaur.componentName" (dict "root" . "component" "api")) (include "centaur.firewallNoProxyHosts" .) | quote }}
             - name: no_proxy

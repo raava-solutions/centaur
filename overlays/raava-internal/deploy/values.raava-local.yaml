@@ -25,7 +25,11 @@ api:
 
 slackbot:
   enabled: true
+  firewallProxy:
+    enabled: false
   extraEnv:
+    # Local Kind overlay does not deploy the API sandbox egress proxy service.
+    # Leave Slack Web API traffic on direct HTTPS egress.
     # Optional: Slack channel ID for duplicate/runtime alerts.
     RUNTIME_ERROR_ALERT_CHANNEL: ""
 
