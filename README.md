@@ -28,6 +28,11 @@
 
 ...and a lot more.
 
+Org-specific overlays should live in an org-owned overlay repo or fork, then be
+mounted into Centaur as an overlay image. Do not push private overlay branches
+to upstream `paradigmxyz/centaur`; keep the base repo generic and use
+organization-owned remotes for organization behavior.
+
 ## Overview
 
 Centaur is a self-hosted agent platform for teams that want one shared agent instead of many one-off local setups.
@@ -102,7 +107,7 @@ production Kubernetes installation. A lightweight k3s cluster on a small
 always-on host is enough. The expected local checkout path is:
 
 ```bash
-/Users/magelinskaas/paradigmxyz/centaur
+~/src/centaur
 ```
 
 Clone the repo and enter it:

@@ -15,6 +15,37 @@ the same file shape as an external overlay repo, so it can later move into a
 dedicated Raava overlay repository without changing the base Centaur extension
 model.
 
+## Source-control boundary
+
+`paradigmxyz/centaur` is the upstream base platform. Raava-specific commits are
+not meant to be pushed there. This directory is a local dogfood overlay that
+should be shared by exporting the patch or by pushing to a Raava-owned overlay
+repo or fork.
+
+Before publishing overlay work, verify the remote target:
+
+```bash
+git remote -v
+git branch --show-current
+```
+
+If `origin` points at `github.com/paradigmxyz/centaur.git`, do not push the
+Raava branch to `origin`. Add or use a Raava-owned remote for overlay work
+instead.
+
+## Upstream vs overlay ownership
+
+Base Centaur behavior lives under paths such as `services/api/`,
+`services/slackbot/`, and `services/sandbox/`. Raava behavior lives in this
+overlay under `overlays/raava-internal/`: personas, the gbrain wrapper, Slack
+routing, manager delegation, sandbox prompt guidance, and Raava skills.
+
+The boundary is resolved at runtime. When `TOOL_DIRS` and `WORKFLOW_DIRS`
+include this overlay after the base directories, Raava tools and workflows are
+discovered from the overlay and same-named entries such as
+`slack_thread_turn` intentionally shadow the base implementation for that
+deployment.
+
 ## Local API discovery
 
 From the repo root, point the API test process at the overlay directories:

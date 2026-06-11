@@ -14,6 +14,11 @@ image into the API and into sandbox pods. API-loaded extension points, such as
 tools and workflows, use the API mount. Sandbox-loaded extension points, such
 as skills and prompts, use the sandbox mount.
 
+Keep source control split the same way: upstream `paradigmxyz/centaur` should
+stay the reusable base, while organization-specific overlay commits are pushed
+to an organization-owned overlay repo or fork. If your local checkout's
+`origin` points at the upstream base repo, do not push overlay branches there.
+
 ## Overlay layout
 
 ```text
@@ -72,6 +77,19 @@ The sandbox entrypoint copies overlay skills from
 `$CENTAUR_OVERLAY_DIR/.agents/skills` into the agent workspace during startup.
 The active deployment block in the sandbox prompt also states whether an overlay
 is loaded and where it is mounted.
+
+Authoritative paths and knobs:
+
+| Surface | Value |
+|---------|-------|
+| Overlay image source path | `overlay.image.sourcePath`, normally `/overlay` |
+| API mount | `/app/overlay/org` |
+| Sandbox mount | `/home/agent/overlay/org` |
+| API discovery env | `TOOL_DIRS`, `WORKFLOW_DIRS` |
+| Sandbox discovery env | `CENTAUR_OVERLAY_DIR` |
+
+Verify the API mount for tools and workflows. Verify the sandbox mount for
+skills, prompt overlays, and files that sandbox agents should read directly.
 
 ## Package the image
 

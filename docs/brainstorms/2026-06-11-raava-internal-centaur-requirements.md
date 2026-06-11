@@ -142,6 +142,16 @@ Centaur is a strong fit because it already has Slack ingress, durable thread run
 - Treating Centaur as a replacement for gbrain's canonical org knowledge.
 - Forking Centaur base platform for Raava-specific behavior.
 
+### Upstreaming Policy
+
+- Base Centaur changes are only for reusable platform primitives.
+- Raava personas, routing, skills, gbrain grounding, and manager delegation
+  behavior stay in the Raava overlay.
+- Publishing Raava overlay work means using a Raava-owned overlay repo or fork,
+  not pushing Raava-specific branches to upstream `paradigmxyz/centaur`.
+- Creating a dedicated external Raava overlay repo is a packaging decision after
+  dogfood validation, not an upstream contribution path.
+
 ---
 
 ## Dependencies And Assumptions

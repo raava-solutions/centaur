@@ -219,9 +219,20 @@ The gbrain tool introduces a new internal knowledge dependency for Raava behavio
 
 ### Deferred to Follow-Up Work
 
-- Moving the Raava overlay into a separate production repository once the local dogfood scaffold is proven.
+- Publishing the Raava overlay through a Raava-owned overlay repo or approved
+  fork once the local dogfood scaffold is proven.
 - Adding production GitOps values for the Raava Slack app and hosted overlay image.
 - Adding stricter per-channel or per-user authorization rules for sensitive personas.
+
+### Upstreaming Policy
+
+- Base Centaur changes are only for reusable platform primitives.
+- Raava personas, routing, skills, gbrain grounding, and manager delegation
+  behavior stay in the Raava overlay.
+- Do not push Raava-specific branches to upstream `paradigmxyz/centaur`; publish
+  overlay work through a Raava-owned remote.
+- Creating a dedicated external Raava overlay repo is a packaging step after
+  dogfood validation, not an upstream contribution path.
 
 ---
 

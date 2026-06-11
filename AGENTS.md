@@ -266,6 +266,11 @@ centaur/
 
 For tool changes: tools hot-reload, so just verify via `curl -X POST http://localhost:8000/tools/<tool>/<method>` from inside the API deployment. For Dockerfile/infra changes: rebuild, redeploy, and verify the binary/service is present and functional. For firewall changes: test from inside a sandbox pod through the proxy.
 
+For organization overlay work, "push" means push to the organization-owned
+overlay remote or approved fork. If `git remote -v` shows `origin` as
+`github.com/paradigmxyz/centaur.git`, do not push private Raava overlay
+branches to `origin`.
+
 ## Local-First Testing — Never Touch the Deploy Box
 
 **All testing and E2E validation MUST happen on the local Kubernetes stack** (`just up` on this machine).
@@ -348,6 +353,8 @@ your-deployment/
 The Helm chart supports ordered overlays by mounting an overlay image or prompt content at `/app/overlay/org`, including its `tools/`, `workflows/`, `.agents/skills/`, persona prompts, and `services/sandbox/SYSTEM_PROMPT.md` after the base repo content.
 
 Later overlay entries win cleanly when names collide, so the base repo stays generic while deployments can layer in org-specific behavior from outside the checkout.
+
+Source-control boundary: keep org-specific overlay commits in an org-owned overlay repo or fork. If this checkout's `origin` points at `github.com/paradigmxyz/centaur.git`, do not push local org overlay branches there; verify `git remote -v` and push through the owning organization's remote instead.
 
 ## Durable Workflows
 

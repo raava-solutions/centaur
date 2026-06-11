@@ -35,6 +35,7 @@ These must exist for the normal Helm deployment. For local development,
 | `SLACK_BOT_TOKEN` | `secretManager.existingSecretName`; local bootstrap reads shell env. | Slack Web API access for Slackbot. |
 | `SANDBOX_SIGNING_KEY` | `secretManager.existingSecretName`; local bootstrap generates it. | Signing key for short-lived sandbox API tokens. |
 | `IRON_MANAGEMENT_API_KEY` | `secretManager.existingSecretName`; local bootstrap generates it. | Management key for API-created iron-proxy pods. |
+| `IRON_BROKER_TOKEN` | `secretManager.existingSecretName`; required when `tokenBroker.enabled=true`. | Bearer token iron-proxy presents to iron-token-broker and the broker enforces on its HTTP API. |
 | `OP_SERVICE_ACCOUNT_TOKEN` | Local shell, then `centaur-infra-env`; production Secret. | 1Password service-account auth when using `onepassword` secret source. |
 | `OP_VAULT` | Local shell, then `centaur-infra-env`; defaults to `ai-agents` in code. | 1Password vault used for `op://...` secret refs. |
 
@@ -130,6 +131,8 @@ Kubernetes backend:
 | `KUBERNETES_SECRET_ENV_NAME`, `KUBERNETES_SECRET_ENV_PREFIX`, `KUBERNETES_BOOTSTRAP_SECRET_NAME` | `secretManager.*`, `secrets.bootstrapSecretName`. | Secrets read by API-created proxy/sandbox pods. |
 | `KUBERNETES_IRON_PROXY_IMAGE`, `KUBERNETES_IRON_PROXY_IMAGE_PULL_POLICY`, `KUBERNETES_IRON_PROXY_PORT`, `KUBERNETES_IRON_PROXY_MANAGEMENT_PORT`, `KUBERNETES_IRON_PROXY_HEALTH_PORT` | `ironProxy.*`. | Per-sandbox iron-proxy image and ports. |
 | `FIREWALL_MANAGER_SECRET_SOURCE`, `FIREWALL_MANAGER_SECRET_TTL`, `KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE` | `ironProxy.secretSource`, `ironProxy.secretTtl`. | Secret source and cache TTL for rendered proxy config. |
+| `FIREWALL_MANAGER_TOKEN_BROKER_TTL` | `tokenBroker.ttl`. | Proxy-side cache TTL for access tokens minted by iron-token-broker. Applied to every `brokered_token` secret. |
+| `KUBERNETES_TOKEN_BROKER_NAME`, `KUBERNETES_TOKEN_BROKER_URL` | `tokenBroker.*`. | iron-token-broker Deployment name and ClusterIP URL. The chart owns the broker Deployment, Service, and NetworkPolicies; the API reconciles its ConfigMap and triggers a rolling restart when the rendered content changes. |
 | `KUBERNETES_OP_CONNECT_HOST`, `KUBERNETES_OP_CONNECT_APP_NAME`, `KUBERNETES_OP_CONNECT_PORT` | Chart helper or `api.extraEnv`. | 1Password Connect endpoint details. |
 | `KUBERNETES_API_POD_LABEL_SELECTOR` | Chart-rendered labels or `api.extraEnv`. | API pod selector for API-managed proxy policies. |
 | `KUBERNETES_EGRESS_DISCOVERY_ENABLED`, `KUBERNETES_EGRESS_SERVICE_NAMESPACE`, `KUBERNETES_CLUSTER_DOMAIN`, `KUBERNETES_EGRESS_TAILNET_FQDN_ANNOTATION` | `api.egressDiscovery.*`. | Egress service discovery for sandbox NetworkPolicies. |
@@ -156,6 +159,7 @@ Sandbox entrypoint and wrappers:
 | `WORKFLOW_RECONCILE_INTERVAL_S`, `WORKFLOW_RESUSPEND_BACKOFF_S` | `api.extraEnv`. | Workflow claim/reclaim cadence. |
 | `WORKFLOW_SCHEDULE_TICK_INTERVAL_S`, `WORKFLOW_SCHEDULE_CATCHUP_LIMIT`, `WORKFLOW_SCHEDULE_MISFIRE_GRACE_S` | `api.extraEnv`. | Scheduled workflow timing and catch-up behavior. |
 | `MY_THREAD_KEY`, `<WORKFLOW_NAME>_THREAD_KEY`, `<WORKFLOW_NAME>_SLACK_CHANNEL` | Workflow-specific env. | Fallback thread/channel targets for workflow agent steps. |
+| `RAAVA_CENTAUR_CHANNEL_DEFAULTS` | `api.extraEnv` when using the Raava overlay. | JSON object or comma list mapping Slack channel IDs or names to approved Raava function leads. |
 | `<WEBHOOK_SECRET_REF>` | API env or Secret named by a workflow `WebhookSpec`. | HMAC secret for public workflow webhooks, for example `GITHUB_WEBHOOK_SECRET`. |
 
 Slack ETL workflows:
@@ -188,3 +192,8 @@ Slack ETL workflows:
 | `CENTAUR_OVERLAY_HOST_DIR`, `CENTAUR_OVERLAY_DIR` | Local shell. | Overlay migration wrapper targets. |
 | `CENTAUR_API_URL`, `CENTAUR_API_KEY` | Local shell. | API target/key for contrib scripts. |
 | `MUESLI_CLI`, `MUESLI_HOST`, `MUESLI_PUSH_LOG`, `MUESLI_SLACK_CHANNEL` | Local shell. | Muesli meeting ingest helper behavior. |
+
+For local Raava overlay dogfood, set `TOOL_DIRS` and `WORKFLOW_DIRS` to include
+`overlays/raava-internal/tools` and `overlays/raava-internal/workflows`. See
+`overlays/raava-internal/README.md` for Docker, direct workflow, and Slack CLI
+smoke checks.
