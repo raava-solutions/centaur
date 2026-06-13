@@ -66,6 +66,119 @@ A real Slack deployment requires:
 Do not invent placeholder production secrets. The Slackbot health route can run
 without them, but real Slack events require the app signing secret and bot token.
 
+## 1Password Connect Secret Path
+
+Use this path when local dogfood should match production secret handling.
+Application and tool credentials stay in 1Password, Centaur tools receive
+placeholders, and iron-proxy resolves the real values through 1Password Connect
+only for declared upstream hosts.
+
+The local production-shaped values overlay is:
+
+```text
+overlays/raava-internal/deploy/values.raava-local-connect.yaml
+```
+
+It layers after `values.raava-local.yaml` and enables:
+
+- `ironProxy.secretSource=onepassword-connect`
+- the in-cluster `onepassword-connect` Deployment and Service
+- API egress through `centaur-api-proxy`, so API-hosted tools get credential
+  injection
+- `centaur-onepassword-connect-credentials` as the Connect credentials Secret
+- `OP_CONNECT_TOKEN` and `OP_VAULT` from `centaur-infra-env`
+
+Create or reuse a shared vault for Centaur tool credentials. For Raava local
+dogfood, use the `Raava` vault. Do not use Personal, Private, or Employee
+vaults for Connect access.
+
+Create the Connect server credentials file outside the repo:
+
+```bash
+CONNECT_DIR="$HOME/.config/centaur/onepassword-connect/raava-centaur-local"
+mkdir -p "$CONNECT_DIR"
+chmod 700 "$HOME/.config/centaur" "$HOME/.config/centaur/onepassword-connect" "$CONNECT_DIR"
+
+cd "$CONNECT_DIR"
+umask 077
+op connect server create "Raava Centaur Local" --vaults "Raava" --force
+chmod 600 1password-credentials.json
+```
+
+Create a least-privilege read token for Centaur's local secret reads:
+
+```bash
+OP_CONNECT_TOKEN="$(op connect token create \
+  "raava-centaur-local-read" \
+  --server "Raava Centaur Local" \
+  --vault "Raava,r")"
+```
+
+Install the Connect credentials and token into Kubernetes without printing
+secret values:
+
+```bash
+kubectl -n centaur create secret generic centaur-onepassword-connect-credentials \
+  --from-file=1password-credentials.json="$CONNECT_DIR/1password-credentials.json" \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+kubectl -n centaur patch secret centaur-infra-env --type merge \
+  -p "$(printf '{"data":{"OP_CONNECT_TOKEN":"%s","OP_VAULT":"%s"}}' \
+    "$(printf '%s' "$OP_CONNECT_TOKEN" | base64 | tr -d '\n')" \
+    "$(printf '%s' "Raava" | base64 | tr -d '\n')")"
+
+unset OP_CONNECT_TOKEN
+```
+
+Store tool credentials as 1Password items in the `Raava` vault. The item name
+must match the tool secret name and the secret value must live in the
+`credential` field. Examples:
+
+```text
+EXA_API_KEY          credential=<exa key>
+FIRECRAWL_API_KEY    credential=<firecrawl key>
+ANTHROPIC_API_KEY    credential=<anthropic key, required for websearch synthesis>
+```
+
+Deploy the Connect-backed local stack:
+
+```bash
+helm upgrade --install centaur contrib/chart \
+  -n centaur --create-namespace \
+  -f contrib/chart/values.dev.yaml \
+  -f overlays/raava-internal/deploy/values.raava-local.yaml \
+  -f overlays/raava-internal/deploy/values.raava-local-connect.yaml
+
+kubectl rollout status -n centaur deploy/onepassword-connect --timeout=180s
+kubectl rollout status -n centaur deploy/centaur-api-proxy --timeout=180s
+kubectl rollout status -n centaur deploy/centaur-centaur-api --timeout=180s
+```
+
+Verify Connect from the allowed path, the API proxy:
+
+```bash
+kubectl -n centaur exec deploy/centaur-api-proxy -- sh -lc '
+  curl -fsS -H "Authorization: Bearer ${OP_CONNECT_TOKEN}" \
+    http://onepassword-connect:8080/v1/vaults | jq "[.[] | {name}]"
+'
+```
+
+Verify a real tool secret injection with Exa-backed websearch:
+
+```bash
+kubectl -n centaur exec deploy/centaur-centaur-api -- sh -lc '
+  curl -sS -X POST \
+    -H "Authorization: Bearer ${LOCAL_DEV_API_KEY}" \
+    -H "Content-Type: application/json" \
+    http://localhost:8000/tools/websearch/search \
+    -d "{\"query\":\"1Password Connect Helm chart\",\"num_results\":2,\"synthesize\":false,\"timeout_seconds\":20}" | jq
+'
+```
+
+Expected result: `result.results` contains Exa search results and no
+`INVALID_API_KEY` error. Deep research and synthesized answers still require
+`ANTHROPIC_API_KEY` in the same vault.
+
 ## Local Kind Bootstrap
 
 For a local Kind smoke without 1Password, create the required chart secrets

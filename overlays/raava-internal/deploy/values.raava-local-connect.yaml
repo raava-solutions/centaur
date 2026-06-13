@@ -1,0 +1,29 @@
+# Raava local dogfood values for 1Password Connect-backed secret resolution.
+#
+# Layer this after values.raava-local.yaml when validating the production-shaped
+# secret path locally.
+
+ironProxy:
+  secretSource: onepassword-connect
+  secretTtl: 10m
+  manager:
+    secretSource: onepassword-connect
+
+api:
+  firewallProxy:
+    enabled: true
+
+onepasswordConnect:
+  connect:
+    create: true
+    credentialsName: centaur-onepassword-connect-credentials
+    credentialsKey: 1password-credentials.json
+    serviceType: ClusterIP
+    api:
+      logLevel: info
+    sync:
+      logLevel: info
+
+secretManager:
+  existingSecretName: centaur-infra-env
+  envPrefix: ""
