@@ -90,6 +90,9 @@
 |call <tool> <method> [json_body] → e.g. call websearch search '{"query":"latest container isolation patterns"}'
 |call tools                      → list all available tools with descriptions
 |call discover <tool>            → show tool methods, params, and descriptions
+|centaur-tool-bridge tools       → JSON CLI bridge over the same Centaur API token
+|centaur-tool-bridge discover <tool>
+|centaur-tool-bridge call <tool> <method> '{"json":"body"}'
 |call agent execute <json>       → fire-and-forget: spawn a persona job
 |call agent status '?key=<key>'  → poll for completion (returns busy + last_result)
 |call agent runtime '?key=<key>' → inspect active persona/overlay/available personas
@@ -229,6 +232,10 @@
 |  - Use `websearch search` with synthesis or `websearch deep_research` for cited answers; the deployment may use OpenRouter or Anthropic behind the same tool.
 |  - Use `firecrawl search` when the user explicitly asks for Firecrawl or when Firecrawl's search/scrape workflow fits the task.
 |  - Use `firecrawl scrape` for one known URL that needs markdown extraction. Do not invent crawl/browser jobs unless live discovery shows those methods.
+|Memory and Raava grounding:
+|  - Use `call supermemory recall` / `call supermemory write` for persistent project memory when the deployment exposes the tool.
+|  - Use `call raava_gbrain ...` for Raava roles, decisions, and operating-model facts before making Raava-specific claims.
+|  - If `call` output needs JSON instead of TOON/text, use `centaur-tool-bridge` with the same tool and method.
 
 [Tool discovery — discover before you call]
 |IMPORTANT: Before calling any API tool, run `call discover <tool>` to see its methods, parameters, and descriptions.

@@ -8,12 +8,15 @@ try the hosted service first and fall back to the local baseline on failure.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 from pathlib import Path
 import sys
 from typing import Any
 
 import httpx
+
+from centaur_sdk import secret
 
 
 def _load_roles_module():
@@ -31,7 +34,13 @@ class RaavaGbrainClient:
     def __init__(self) -> None:
         self._roles = _load_roles_module()
         self.base_url = os.getenv("RAAVA_GBRAIN_BASE_URL", "").rstrip("/")
-        self.api_key = os.getenv("RAAVA_GBRAIN_API_KEY", "")
+        self.api_key = self._optional_secret("RAAVA_GBRAIN_API_KEY", "")
+
+    def _optional_secret(self, key: str, default: str = "") -> str:
+        try:
+            return secret(key)
+        except KeyError:
+            return default
 
     def roster_baseline(self) -> dict[str, Any]:
         remote = self._remote_get("/roster/baseline")
@@ -99,10 +108,57 @@ class RaavaGbrainClient:
                 timeout=10.0,
             )
             response.raise_for_status()
-            data = response.json()
+            data = self._decode_remote_response(response)
         except Exception:
             return None
         return data if isinstance(data, dict) else {"result": data}
+
+    def _decode_remote_response(self, response: httpx.Response) -> Any:
+        content_type = response.headers.get("content-type", "")
+        if "text/event-stream" in content_type:
+            return self._decode_sse(response.text)
+        try:
+            data = response.json()
+        except ValueError:
+            text = response.text.strip()
+            if text.startswith("data:"):
+                return self._decode_sse(text)
+            return {"text": text} if text else {}
+        return self._normalize_remote_payload(data)
+
+    def _decode_sse(self, text: str) -> Any:
+        last_payload: Any = {}
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("data:"):
+                continue
+            raw = stripped.removeprefix("data:").strip()
+            if not raw or raw == "[DONE]":
+                continue
+            try:
+                last_payload = self._normalize_remote_payload(json.loads(raw))
+            except json.JSONDecodeError:
+                last_payload = {"text": raw}
+        return last_payload
+
+    def _normalize_remote_payload(self, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        if "jsonrpc" in data and "result" in data:
+            return self._normalize_remote_payload(data["result"])
+        content = data.get("content")
+        if isinstance(content, list):
+            text_parts: list[str] = []
+            for item in content:
+                if isinstance(item, dict) and isinstance(item.get("text"), str):
+                    text_parts.append(item["text"])
+            text = "".join(text_parts).strip()
+            if text:
+                try:
+                    return self._normalize_remote_payload(json.loads(text))
+                except json.JSONDecodeError:
+                    return {"text": text}
+        return data
 
 
 def _client() -> RaavaGbrainClient:

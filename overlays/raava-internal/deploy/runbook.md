@@ -140,7 +140,7 @@ must match the tool secret name and the secret value must live in the
 | `OPENROUTER_API_KEY` | `credential` | Synthesized `websearch` and `deep_research` through OpenRouter. | Yes |
 | `FIRECRAWL_API_KEY` | `credential` | `firecrawl search` and `firecrawl scrape`. | Yes |
 | `ANTHROPIC_API_KEY` | `credential` | Optional Anthropic compatibility for websearch synthesis. | No |
-| `SUPERMEMORY_API_KEY` | `credential` | Supermemory memory tool or MCP bridge once enabled. | Next unit |
+| `SUPERMEMORY_API_KEY` | `credential` | `supermemory recall`, `write`, and `status`. | Yes |
 | `RAAVA_GBRAIN_API_KEY` | `credential` | Hosted gbrain bridge when the hosted service enforces bearer auth. | If hosted auth requires it |
 
 Non-secret model selection stays in deployment config, not 1Password:
@@ -219,6 +219,75 @@ kubectl -n centaur exec deploy/centaur-centaur-api -- sh -lc '
 
 Expected result: the tool exposes `search` and `scrape`, and
 `result.results` contains Firecrawl search rows.
+
+Verify Supermemory bridge discovery and a harmless write/recall:
+
+```bash
+kubectl -n centaur exec deploy/centaur-centaur-api -- sh -lc '
+  curl -sS -H "Authorization: Bearer ${LOCAL_DEV_API_KEY}" \
+    http://localhost:8000/tools/supermemory | jq ".methods[].name"
+'
+
+kubectl -n centaur exec deploy/centaur-centaur-api -- sh -lc '
+  curl -sS -X POST \
+    -H "Authorization: Bearer ${LOCAL_DEV_API_KEY}" \
+    -H "Content-Type: application/json" \
+    http://localhost:8000/tools/supermemory/write \
+    -d "{\"content\":\"Centaur local Supermemory smoke $(date -u +%FT%TZ)\",\"container_tag\":\"raava-centaur-smoke\"}" | jq
+'
+
+kubectl -n centaur exec deploy/centaur-centaur-api -- sh -lc '
+  curl -sS -X POST \
+    -H "Authorization: Bearer ${LOCAL_DEV_API_KEY}" \
+    -H "Content-Type: application/json" \
+    http://localhost:8000/tools/supermemory/recall \
+    -d "{\"query\":\"Centaur local Supermemory smoke\",\"container_tag\":\"raava-centaur-smoke\",\"limit\":3}" | jq
+'
+```
+
+Expected result: the tool exposes `write`, `recall`, and `status`; write
+returns a Supermemory document id/status; recall returns matching results after
+indexing completes.
+
+Verify the sandbox CLI bridge does not need provider keys:
+
+```bash
+kubectl -n centaur exec deploy/centaur-centaur-api -- sh -lc '
+  curl -sS -X POST \
+    -H "Authorization: Bearer ${LOCAL_DEV_API_KEY}" \
+    -H "Content-Type: application/json" \
+    http://localhost:8000/agent/spawn \
+    -d "{\"thread_key\":\"bridge-smoke-$(date +%s)\"}" | jq
+'
+```
+
+After a sandbox is assigned, exec into the sandbox pod and run:
+
+```bash
+centaur-tool-bridge tools | jq 'keys'
+centaur-tool-bridge discover supermemory | jq '.methods[].name'
+env | grep -E 'SUPERMEMORY_API_KEY|OPENROUTER_API_KEY|FIRECRAWL_API_KEY|EXA_API_KEY' && exit 1 || true
+```
+
+Expected result: tools are visible through the bridge and raw provider keys are
+not present in the sandbox environment.
+
+If `RAAVA_GBRAIN_BASE_URL` is set in the overlay values, verify hosted gbrain
+grounding:
+
+```bash
+kubectl -n centaur exec deploy/centaur-centaur-api -- sh -lc '
+  curl -sS -X POST \
+    -H "Authorization: Bearer ${LOCAL_DEV_API_KEY}" \
+    -H "Content-Type: application/json" \
+    http://localhost:8000/tools/raava_gbrain/search_decisions \
+    -d "{\"query\":\"active Raava function leads\",\"limit\":3}" | jq
+'
+```
+
+Expected result: hosted responses normalize into the same contract as the local
+baseline. If hosted gbrain is unavailable, the result should clearly show the
+local-baseline source rather than inventing unsupported facts.
 
 ## Local Kind Bootstrap
 

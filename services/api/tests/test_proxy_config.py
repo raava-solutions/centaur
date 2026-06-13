@@ -289,24 +289,42 @@ def test_parser_raw_string_inherits_default_hosts() -> None:
 
 def test_research_tool_provider_secrets_are_host_scoped() -> None:
     firecrawl_pyproject = REPO_ROOT / "tools/research/firecrawl/pyproject.toml"
+    supermemory_pyproject = REPO_ROOT / "tools/memory/supermemory/pyproject.toml"
     websearch_pyproject = REPO_ROOT / "tools/research/websearch/pyproject.toml"
+    gbrain_pyproject = REPO_ROOT / "overlays/raava-internal/tools/raava_gbrain/pyproject.toml"
     with firecrawl_pyproject.open("rb") as f:
         firecrawl = tomllib.load(f)
+    with supermemory_pyproject.open("rb") as f:
+        supermemory = tomllib.load(f)
     with websearch_pyproject.open("rb") as f:
         websearch = tomllib.load(f)
+    with gbrain_pyproject.open("rb") as f:
+        gbrain = tomllib.load(f)
 
     firecrawl_secrets = _parse_secrets(firecrawl["tool"]["centaur"]["secrets"])
+    supermemory_secrets = _parse_secrets(supermemory["tool"]["centaur"]["secrets"])
     websearch_secrets = _parse_secrets(websearch["tool"]["centaur"]["secrets"])
+    gbrain_secrets = _parse_secrets(gbrain["tool"]["centaur"]["secrets"])
 
     firecrawl_key = next(s for s in firecrawl_secrets if s.name == "FIRECRAWL_API_KEY")
+    supermemory_key = next(
+        s for s in supermemory_secrets if s.name == "SUPERMEMORY_API_KEY"
+    )
     openrouter_key = next(s for s in websearch_secrets if s.name == "OPENROUTER_API_KEY")
+    gbrain_key = next(s for s in gbrain_secrets if s.name == "RAAVA_GBRAIN_API_KEY")
 
     assert isinstance(firecrawl_key, HttpSecret)
     assert firecrawl_key.hosts == ("api.firecrawl.dev",)
     assert firecrawl_key.match_headers == ("Authorization",)
+    assert isinstance(supermemory_key, HttpSecret)
+    assert supermemory_key.hosts == ("api.supermemory.ai",)
+    assert supermemory_key.match_headers == ("Authorization",)
     assert isinstance(openrouter_key, HttpSecret)
     assert openrouter_key.hosts == ("openrouter.ai",)
     assert openrouter_key.match_headers == ("Authorization",)
+    assert isinstance(gbrain_key, HttpSecret)
+    assert gbrain_key.hosts == ("raava-brain-gbrain-lmbn6fkciq-ue.a.run.app",)
+    assert gbrain_key.match_headers == ("Authorization",)
 
 
 def test_parser_header_secret_rejects_empty_hosts() -> None:

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
+
+import httpx
 
 from api.tool_manager import ToolManager
 
@@ -126,3 +129,38 @@ def test_raava_gbrain_tool_uses_local_baseline(monkeypatch) -> None:
     assert decisions["results"][0]["path"] == (
         "decisions/2026-05-25-agent-roster-lean-down-and-restructure"
     )
+
+
+def test_raava_gbrain_tool_decodes_hosted_sse_jsonrpc_payload(monkeypatch) -> None:
+    monkeypatch.delenv("RAAVA_GBRAIN_BASE_URL", raising=False)
+    client_module = _load_module(
+        "test_raava_gbrain_client_sse",
+        OVERLAY_ROOT / "tools" / "raava_gbrain" / "client.py",
+    )
+    client = client_module.RaavaGbrainClient()
+    payload = {
+        "jsonrpc": "2.0",
+        "result": {
+            "content": [
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        {
+                            "source": "hosted-gbrain",
+                            "results": [{"path": "decisions/example"}],
+                        }
+                    ),
+                }
+            ]
+        },
+    }
+    response = httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        content=f"event: message\ndata: {json.dumps(payload)}\n\n".encode(),
+    )
+
+    assert client._decode_remote_response(response) == {
+        "source": "hosted-gbrain",
+        "results": [{"path": "decisions/example"}],
+    }
