@@ -18,8 +18,10 @@ api:
   extraEnv:
     # Override per deployment with real Slack channel IDs.
     RAAVA_CENTAUR_CHANNEL_DEFAULTS: "{}"
-    # Optional: set to hosted gbrain when available.
-    RAAVA_GBRAIN_BASE_URL: ""
+    # Local Kind reaches hosted gbrain through a Cloud Run proxy sidecar in the
+    # API pod. Direct-hosted deployments can override this to the Cloud Run URL
+    # when RAAVA_GBRAIN_OAUTH is available to iron-proxy.
+    RAAVA_GBRAIN_BASE_URL: "http://127.0.0.1:8087"
     WEBSEARCH_SYNTHESIS_PROVIDER: "auto"
     OPENROUTER_MODEL: "deepseek/deepseek-chat"
     # Local-only admin key for Kind smoke tests. Replace or remove outside dev.

@@ -8,5 +8,6 @@ dependencies = ["httpx>=0.28.0"]
 [tool.centaur]
 module = "client.py"
 secrets = [
+    {type = "oauth_token", grant = "client_credentials", name = "RAAVA_GBRAIN_OAUTH", token_endpoint = "https://raava-brain-gbrain-lmbn6fkciq-ue.a.run.app/token", hosts = ["raava-brain-gbrain-lmbn6fkciq-ue.a.run.app"], scopes = ["read"], fields = {client_id = {secret_ref = "RAAVA_GBRAIN_OAUTH", json_key = "client_id"}, client_secret = {secret_ref = "RAAVA_GBRAIN_OAUTH", json_key = "client_secret"}}},
     {type = "http", name = "RAAVA_GBRAIN_API_KEY", match_headers = ["Authorization"], hosts = ["raava-brain-gbrain-lmbn6fkciq-ue.a.run.app"]},
 ]

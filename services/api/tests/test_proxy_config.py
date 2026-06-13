@@ -311,6 +311,7 @@ def test_research_tool_provider_secrets_are_host_scoped() -> None:
         s for s in supermemory_secrets if s.name == "SUPERMEMORY_API_KEY"
     )
     openrouter_key = next(s for s in websearch_secrets if s.name == "OPENROUTER_API_KEY")
+    gbrain_oauth = next(s for s in gbrain_secrets if s.name == "RAAVA_GBRAIN_OAUTH")
     gbrain_key = next(s for s in gbrain_secrets if s.name == "RAAVA_GBRAIN_API_KEY")
 
     assert isinstance(firecrawl_key, HttpSecret)
@@ -322,6 +323,16 @@ def test_research_tool_provider_secrets_are_host_scoped() -> None:
     assert isinstance(openrouter_key, HttpSecret)
     assert openrouter_key.hosts == ("openrouter.ai",)
     assert openrouter_key.match_headers == ("Authorization",)
+    assert isinstance(gbrain_oauth, OAuthTokenSecret)
+    assert gbrain_oauth.hosts == ("raava-brain-gbrain-lmbn6fkciq-ue.a.run.app",)
+    assert gbrain_oauth.grant == "client_credentials"
+    assert gbrain_oauth.token_endpoint == (
+        "https://raava-brain-gbrain-lmbn6fkciq-ue.a.run.app/token"
+    )
+    assert dict(gbrain_oauth.fields) == {
+        "client_id": OAuthFieldSource("RAAVA_GBRAIN_OAUTH", "client_id"),
+        "client_secret": OAuthFieldSource("RAAVA_GBRAIN_OAUTH", "client_secret"),
+    }
     assert isinstance(gbrain_key, HttpSecret)
     assert gbrain_key.hosts == ("raava-brain-gbrain-lmbn6fkciq-ue.a.run.app",)
     assert gbrain_key.match_headers == ("Authorization",)
