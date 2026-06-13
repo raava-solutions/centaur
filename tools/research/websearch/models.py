@@ -19,6 +19,8 @@ class ResponseMeta(BaseModel):
     exa_request_ids: list[str] = Field(default_factory=list)
     partial_failures: list[dict[str, str]] = Field(default_factory=list)
     estimated_cost_usd: float | None = None
+    synthesis_provider: str | None = None
+    synthesis_model: str | None = None
 
 
 class SearchResponse(BaseModel):

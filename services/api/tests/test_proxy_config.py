@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import tomllib
+from pathlib import Path
+
 import pytest
 import yaml
 
@@ -21,6 +24,9 @@ from api.tool_manager import (
     _parse_secret,
     _parse_secrets,
 )
+
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 # ── parser ──────────────────────────────────────────────────────────────────
@@ -279,6 +285,28 @@ def test_parser_header_secret_falls_back_to_default_hosts() -> None:
 def test_parser_raw_string_inherits_default_hosts() -> None:
     secret = _parse_secret("API_KEY", default_hosts=("api.example.com",))
     assert secret.hosts == ("api.example.com",)
+
+
+def test_research_tool_provider_secrets_are_host_scoped() -> None:
+    firecrawl_pyproject = REPO_ROOT / "tools/research/firecrawl/pyproject.toml"
+    websearch_pyproject = REPO_ROOT / "tools/research/websearch/pyproject.toml"
+    with firecrawl_pyproject.open("rb") as f:
+        firecrawl = tomllib.load(f)
+    with websearch_pyproject.open("rb") as f:
+        websearch = tomllib.load(f)
+
+    firecrawl_secrets = _parse_secrets(firecrawl["tool"]["centaur"]["secrets"])
+    websearch_secrets = _parse_secrets(websearch["tool"]["centaur"]["secrets"])
+
+    firecrawl_key = next(s for s in firecrawl_secrets if s.name == "FIRECRAWL_API_KEY")
+    openrouter_key = next(s for s in websearch_secrets if s.name == "OPENROUTER_API_KEY")
+
+    assert isinstance(firecrawl_key, HttpSecret)
+    assert firecrawl_key.hosts == ("api.firecrawl.dev",)
+    assert firecrawl_key.match_headers == ("Authorization",)
+    assert isinstance(openrouter_key, HttpSecret)
+    assert openrouter_key.hosts == ("openrouter.ai",)
+    assert openrouter_key.match_headers == ("Authorization",)
 
 
 def test_parser_header_secret_rejects_empty_hosts() -> None:
@@ -1441,7 +1469,7 @@ def test_render_emits_postgres_listeners_with_env_refs(
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
     listeners = cfg["postgres"]
-    assert [l["name"] for l in listeners] == ["analytics_pg", "database_url"]
+    assert [listener["name"] for listener in listeners] == ["analytics_pg", "database_url"]
     assert listeners[0]["listen"] == "0.0.0.0:5432"
     assert listeners[1]["listen"] == "0.0.0.0:5433"
     # upstream.dsn uses the secret_ref directly so iron-proxy can resolve it

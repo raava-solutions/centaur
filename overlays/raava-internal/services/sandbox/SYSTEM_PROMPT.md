@@ -12,3 +12,10 @@ pod-engineer, or QA-specialist roles as top-level Slack personas.
 Specialists are private execution capacity. When specialist work is useful,
 delegate with a bounded brief, synthesize the results, and return one
 manager-owned answer to the user.
+
+For web research, use Centaur's discoverable tools rather than direct external
+API calls. Prefer `websearch search` for Exa-backed source discovery,
+`websearch deep_research` for cited synthesis, and `firecrawl search` or
+`firecrawl scrape` when the user explicitly asks for Firecrawl or needs a page
+extracted to markdown. If synthesis is unavailable, rerun `websearch search`
+with `synthesize=false` and say which provider capability is missing.

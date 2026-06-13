@@ -132,13 +132,20 @@ unset OP_CONNECT_TOKEN
 
 Store tool credentials as 1Password items in the `Raava` vault. The item name
 must match the tool secret name and the secret value must live in the
-`credential` field. Examples:
+`credential` field.
 
-```text
-EXA_API_KEY          credential=<exa key>
-FIRECRAWL_API_KEY    credential=<firecrawl key>
-ANTHROPIC_API_KEY    credential=<anthropic key, required for websearch synthesis>
-```
+| Item title | Field | Unlocks | Required for first Raava dogfood |
+|------------|-------|---------|----------------------------------|
+| `EXA_API_KEY` | `credential` | Raw `websearch search` retrieval. | Yes |
+| `OPENROUTER_API_KEY` | `credential` | Synthesized `websearch` and `deep_research` through OpenRouter. | Yes |
+| `FIRECRAWL_API_KEY` | `credential` | `firecrawl search` and `firecrawl scrape`. | Yes |
+| `ANTHROPIC_API_KEY` | `credential` | Optional Anthropic compatibility for websearch synthesis. | No |
+| `SUPERMEMORY_API_KEY` | `credential` | Supermemory memory tool or MCP bridge once enabled. | Next unit |
+| `RAAVA_GBRAIN_API_KEY` | `credential` | Hosted gbrain bridge when the hosted service enforces bearer auth. | If hosted auth requires it |
+
+Non-secret model selection stays in deployment config, not 1Password:
+`OPENROUTER_MODEL=deepseek/deepseek-chat` and
+`WEBSEARCH_SYNTHESIS_PROVIDER=auto` are the local Raava defaults.
 
 Deploy the Connect-backed local stack:
 
@@ -163,7 +170,7 @@ kubectl -n centaur exec deploy/centaur-api-proxy -- sh -lc '
 '
 ```
 
-Verify a real tool secret injection with Exa-backed websearch:
+Verify real tool secret injection with Exa-backed raw websearch:
 
 ```bash
 kubectl -n centaur exec deploy/centaur-centaur-api -- sh -lc '
@@ -176,8 +183,42 @@ kubectl -n centaur exec deploy/centaur-centaur-api -- sh -lc '
 ```
 
 Expected result: `result.results` contains Exa search results and no
-`INVALID_API_KEY` error. Deep research and synthesized answers still require
-`ANTHROPIC_API_KEY` in the same vault.
+`INVALID_API_KEY` error.
+
+Verify OpenRouter-backed synthesis without requiring Anthropic:
+
+```bash
+kubectl -n centaur exec deploy/centaur-centaur-api -- sh -lc '
+  curl -sS -X POST \
+    -H "Authorization: Bearer ${LOCAL_DEV_API_KEY}" \
+    -H "Content-Type: application/json" \
+    http://localhost:8000/tools/websearch/search \
+    -d "{\"query\":\"1Password Connect Helm chart\",\"num_results\":2,\"synthesize\":true,\"timeout_seconds\":45}" | jq ".result.meta"
+'
+```
+
+Expected result: `synthesis_provider` is `openrouter` and no
+`ANTHROPIC_API_KEY not set` error appears.
+
+Verify Firecrawl discovery and a bounded search:
+
+```bash
+kubectl -n centaur exec deploy/centaur-centaur-api -- sh -lc '
+  curl -sS -H "Authorization: Bearer ${LOCAL_DEV_API_KEY}" \
+    http://localhost:8000/tools/firecrawl | jq ".methods[].name"
+'
+
+kubectl -n centaur exec deploy/centaur-centaur-api -- sh -lc '
+  curl -sS -X POST \
+    -H "Authorization: Bearer ${LOCAL_DEV_API_KEY}" \
+    -H "Content-Type: application/json" \
+    http://localhost:8000/tools/firecrawl/search \
+    -d "{\"query\":\"Firecrawl scrape API\",\"limit\":2,\"timeout_seconds\":20}" | jq
+'
+```
+
+Expected result: the tool exposes `search` and `scrape`, and
+`result.results` contains Firecrawl search rows.
 
 ## Local Kind Bootstrap
 

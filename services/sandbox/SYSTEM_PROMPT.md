@@ -214,12 +214,21 @@
 |
 |Examples:
 |  call websearch search '{"query":"latest SEC ruling on stablecoins"}'
-|  call websearch deep_research '{"query":"comparison of L2 rollup economics"}'
+|  call websearch search '{"query":"latest SEC ruling on stablecoins","synthesize":false}'
+|  call websearch deep_research '{"question":"comparison of L2 rollup economics"}'
+|  call firecrawl search '{"query":"Firecrawl scrape API","limit":5}'
+|  call firecrawl scrape '{"url":"https://docs.firecrawl.dev/api-reference/endpoint/scrape"}'
 |  call twitter get_user '{"username":"ethereum"}'
 |  call twitter search_tweets '{"query":"ethereum","max_results":20}'
 |  call linear search_issues '{"query":"bug in auth"}'
 |  call notion search '{"query":"meeting notes"}'
 |  call vlogs errors '{"service":"api"}'
+
+|Research surface selection:
+|  - Use `websearch search` for Exa-backed web retrieval; set `synthesize=false` when raw links are enough or synthesis credentials are unavailable.
+|  - Use `websearch search` with synthesis or `websearch deep_research` for cited answers; the deployment may use OpenRouter or Anthropic behind the same tool.
+|  - Use `firecrawl search` when the user explicitly asks for Firecrawl or when Firecrawl's search/scrape workflow fits the task.
+|  - Use `firecrawl scrape` for one known URL that needs markdown extraction. Do not invent crawl/browser jobs unless live discovery shows those methods.
 
 [Tool discovery — discover before you call]
 |IMPORTANT: Before calling any API tool, run `call discover <tool>` to see its methods, parameters, and descriptions.

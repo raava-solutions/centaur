@@ -1,20 +1,28 @@
 # Websearch Plugin
 
-Web search and deep research tool backed by Exa (retrieval) and Claude (analysis/synthesis).
+Web search and deep research tool backed by Exa retrieval plus configurable
+analysis/synthesis. OpenRouter is the preferred Raava dogfood synthesis provider;
+Anthropic remains available as an explicit compatibility provider.
 
 ## Secrets
 
 Set these in root `.env` (preferred) or `tools/websearch/.env`:
 
 - `EXA_API_KEY`
-- `ANTHROPIC_API_KEY`
-- `DEEP_RESEARCH_MODEL` (default: `claude-opus-4-6`)
+- `OPENROUTER_API_KEY` for synthesized answers through OpenRouter
+- `OPENROUTER_MODEL` (default: `deepseek/deepseek-chat`)
+- `WEBSEARCH_SYNTHESIS_PROVIDER` (`auto`, `openrouter`, or `anthropic`; default: `auto`)
+- `ANTHROPIC_API_KEY` for Anthropic compatibility
+- `DEEP_RESEARCH_MODEL` for Anthropic compatibility (default: `claude-opus-4-6`)
+
+Raw Exa retrieval does not require a synthesis key when `synthesize=false`.
 
 ## Tools
 
 ### `search`
 
-One-shot web search with normalized sources and a synthesized cited answer (`answer_markdown`) by default.
+One-shot web search with normalized sources and a synthesized cited answer
+(`answer_markdown`) by default.
 
 Key defaults:
 
@@ -22,6 +30,8 @@ Key defaults:
 - `num_results=10`
 - synthesis enabled (`synthesize=true`)
 - highlight-focused retrieval for token efficiency
+- provider metadata is returned under `meta.synthesis_provider` and
+  `meta.synthesis_model` when synthesis runs
 
 ### `deep_research`
 

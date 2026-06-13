@@ -13,7 +13,7 @@ from .client import _client
 
 load_dotenv()
 
-app = typer.Typer(name="websearch", help="Web search and deep research via Exa + Claude")
+app = typer.Typer(name="websearch", help="Web search via Exa plus configurable synthesis")
 console = Console(stderr=True)
 
 

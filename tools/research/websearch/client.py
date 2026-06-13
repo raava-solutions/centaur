@@ -1,4 +1,4 @@
-"""Websearch client powered by Exa and Claude."""
+"""Websearch client powered by Exa plus configurable synthesis providers."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ from .prompts import (
 
 
 class WebSearchClient:
-    """Web search and deep research via Exa and Claude."""
+    """Web search and deep research via Exa and configurable synthesis providers."""
 
     EXA_MAX_PARALLEL_CALLS = 6
     REVIEW_SOURCE_CHAR_LIMIT = 3500
@@ -48,16 +48,31 @@ class WebSearchClient:
         self,
         exa_api_key: str | None = None,
         anthropic_api_key: str | None = None,
+        openrouter_api_key: str | None = None,
+        synthesis_provider: str | None = None,
         deep_research_model: str | None = None,
+        openrouter_model: str | None = None,
         exa_base_url: str = "https://api.exa.ai",
+        openrouter_base_url: str = "https://openrouter.ai/api/v1",
         max_retries: int = 3,
     ):
         self._exa_api_key = exa_api_key or self._optional_secret("EXA_API_KEY")
         self._anthropic_api_key = anthropic_api_key or self._optional_secret("ANTHROPIC_API_KEY")
-        self._deep_research_model = deep_research_model or self._optional_secret(
-            "DEEP_RESEARCH_MODEL", "claude-opus-4-6"
+        self._openrouter_api_key = openrouter_api_key or self._optional_secret("OPENROUTER_API_KEY")
+        self._synthesis_provider = (
+            synthesis_provider
+            or self._optional_config("WEBSEARCH_SYNTHESIS_PROVIDER", "auto")
+        ).strip().lower()
+        self._anthropic_model = (
+            deep_research_model
+            or self._optional_config("DEEP_RESEARCH_MODEL", "claude-opus-4-6")
+        )
+        self._openrouter_model = (
+            openrouter_model
+            or self._optional_config("OPENROUTER_MODEL", "deepseek/deepseek-chat")
         )
         self._exa_base_url = exa_base_url.rstrip("/")
+        self._openrouter_base_url = openrouter_base_url.rstrip("/")
         self._max_retries = max_retries
         self._progress_callback: Callable[[str], None] | None = None
 
@@ -74,6 +89,12 @@ class WebSearchClient:
         except KeyError:
             return default
 
+    def _optional_config(self, key: str, default: str) -> str:
+        value = self._optional_secret(key, default)
+        if not value or value == key:
+            return default
+        return value
+
     def _require_exa_api_key(self) -> str:
         if not self._exa_api_key:
             raise RuntimeError("EXA_API_KEY not set.")
@@ -84,10 +105,41 @@ class WebSearchClient:
             raise RuntimeError("ANTHROPIC_API_KEY not set.")
         return self._anthropic_api_key
 
-    def _require_deep_research_model(self) -> str:
-        if not self._deep_research_model:
+    def _require_openrouter_api_key(self) -> str:
+        if not self._openrouter_api_key:
+            raise RuntimeError("OPENROUTER_API_KEY not set.")
+        return self._openrouter_api_key
+
+    def _require_anthropic_model(self) -> str:
+        if not self._anthropic_model:
             raise RuntimeError("DEEP_RESEARCH_MODEL not set.")
-        return self._deep_research_model
+        return self._anthropic_model
+
+    def _require_openrouter_model(self) -> str:
+        if not self._openrouter_model:
+            raise RuntimeError("OPENROUTER_MODEL not set.")
+        return self._openrouter_model
+
+    def _select_synthesis_provider(self) -> tuple[str, str]:
+        provider = self._synthesis_provider or "auto"
+        if provider == "auto":
+            if self._openrouter_api_key:
+                return "openrouter", self._require_openrouter_model()
+            if self._anthropic_api_key:
+                return "anthropic", self._require_anthropic_model()
+            raise RuntimeError(
+                "No synthesis provider configured. Set OPENROUTER_API_KEY or "
+                "ANTHROPIC_API_KEY, or call search with synthesize=false."
+            )
+        if provider == "openrouter":
+            self._require_openrouter_api_key()
+            return "openrouter", self._require_openrouter_model()
+        if provider == "anthropic":
+            self._require_anthropic_api_key()
+            return "anthropic", self._require_anthropic_model()
+        raise RuntimeError(
+            "WEBSEARCH_SYNTHESIS_PROVIDER must be one of: auto, openrouter, anthropic."
+        )
 
     def _is_retryable_status(self, status_code: int) -> bool:
         return status_code == 429 or status_code >= 500
@@ -530,7 +582,28 @@ class WebSearchClient:
             "costDollars": {"total": total_cost},
         }
 
-    async def _call_claude_text(
+    def _extract_openrouter_text(self, payload: dict[str, Any]) -> str:
+        choices = payload.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return ""
+        first_choice = choices[0]
+        if not isinstance(first_choice, dict):
+            return ""
+        message = first_choice.get("message")
+        if not isinstance(message, dict):
+            return ""
+        content = message.get("content")
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, dict) and isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+            return "".join(parts).strip()
+        return ""
+
+    async def _call_anthropic_text(
         self,
         *,
         system_prompt: str,
@@ -542,7 +615,7 @@ class WebSearchClient:
         client = AsyncAnthropic(api_key=self._require_anthropic_api_key())
         try:
             message = await client.messages.create(
-                model=self._require_deep_research_model(),
+                model=self._require_anthropic_model(),
                 max_tokens=max_tokens,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_prompt}],
@@ -556,17 +629,81 @@ class WebSearchClient:
             raise
         text = self._extract_text_content(message)
         if not text:
-            raise RuntimeError("Claude returned empty content.")
+            raise RuntimeError("Anthropic returned empty content.")
         return text
 
-    async def _call_claude_json(
+    async def _call_openrouter_text(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int = 4096,
+    ) -> str:
+        headers = {
+            "Authorization": f"Bearer {self._require_openrouter_api_key()}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": self._require_openrouter_model(),
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "max_tokens": max_tokens,
+        }
+        async with httpx.AsyncClient(base_url=self._openrouter_base_url, timeout=120.0) as client:
+            try:
+                response = await client.post(
+                    "/chat/completions",
+                    headers=headers,
+                    json=payload,
+                )
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code
+                body = exc.response.text
+                if status_code in {401, 403}:
+                    raise RuntimeError(
+                        "OpenRouter authentication failed. Check OPENROUTER_API_KEY "
+                        "in .env or env injection."
+                    ) from exc
+                raise RuntimeError(f"OpenRouter request failed ({status_code}): {body}") from exc
+            except httpx.RequestError as exc:
+                raise RuntimeError(f"OpenRouter request failed: {exc}") from exc
+
+        text = self._extract_openrouter_text(response.json())
+        if not text:
+            raise RuntimeError("OpenRouter returned empty content.")
+        return text
+
+    async def _call_model_text(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int = 4096,
+    ) -> str:
+        provider, _model = self._select_synthesis_provider()
+        if provider == "openrouter":
+            return await self._call_openrouter_text(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                max_tokens=max_tokens,
+            )
+        return await self._call_anthropic_text(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            max_tokens=max_tokens,
+        )
+
+    async def _call_model_json(
         self,
         *,
         system_prompt: str,
         user_prompt: str,
         max_tokens: int = 2048,
     ) -> Any:
-        raw = await self._call_claude_text(
+        raw = await self._call_model_text(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             max_tokens=max_tokens,
@@ -591,7 +728,7 @@ class WebSearchClient:
             },
             indent=2,
         )
-        payload = await self._call_claude_json(
+        payload = await self._call_model_json(
             system_prompt=QUERY_PLANNER_SYSTEM,
             user_prompt=user_prompt,
             max_tokens=1600,
@@ -636,7 +773,7 @@ class WebSearchClient:
             },
             indent=2,
         )
-        payload = await self._call_claude_json(
+        payload = await self._call_model_json(
             system_prompt=EVIDENCE_REVIEWER_SYSTEM,
             user_prompt=user_prompt,
             max_tokens=3600,
@@ -696,7 +833,7 @@ class WebSearchClient:
             },
             indent=2,
         )
-        report = await self._call_claude_text(
+        report = await self._call_model_text(
             system_prompt=REPORT_WRITER_SYSTEM,
             user_prompt=user_prompt,
             max_tokens=8000,
@@ -729,7 +866,7 @@ class WebSearchClient:
             },
             indent=2,
         )
-        repaired = await self._call_claude_text(
+        repaired = await self._call_model_text(
             system_prompt=REPORT_REPAIR_SYSTEM,
             user_prompt=user_prompt,
             max_tokens=7000,
@@ -818,10 +955,11 @@ class WebSearchClient:
 
         partial_failures: list[dict[str, str]] = []
         answer_markdown: str | None = None
+        synthesis_provider: str | None = None
+        synthesis_model: str | None = None
         if synthesize and results:
             try:
-                self._require_anthropic_api_key()
-                self._require_deep_research_model()
+                synthesis_provider, synthesis_model = self._select_synthesis_provider()
                 reviewer = await self._review_evidence(
                     question=normalized_query,
                     sources=results,
@@ -843,7 +981,9 @@ class WebSearchClient:
                     max_report_chars=max_report_chars,
                 )
             except Exception as exc:
-                partial_failures.append({"query": normalized_query, "error": f"synthesis failed: {exc}"})
+                partial_failures.append(
+                    {"query": normalized_query, "error": f"synthesis failed: {exc}"}
+                )
 
         meta = ResponseMeta(
             duration_ms=int((time.perf_counter() - started) * 1000),
@@ -852,6 +992,8 @@ class WebSearchClient:
             else [],
             partial_failures=partial_failures,
             estimated_cost_usd=self._extract_cost(response) or None,
+            synthesis_provider=synthesis_provider,
+            synthesis_model=synthesis_model,
         )
         return SearchResponse(
             query=normalized_query,
@@ -873,8 +1015,7 @@ class WebSearchClient:
     ) -> dict:
         """Run iterative deep research with citation validation."""
         self._require_exa_api_key()
-        self._require_anthropic_api_key()
-        self._require_deep_research_model()
+        synthesis_provider, synthesis_model = self._select_synthesis_provider()
         if max_iterations < 1:
             raise RuntimeError("max_iterations must be >= 1.")
         if num_queries_per_iteration < 1:
@@ -1038,6 +1179,8 @@ class WebSearchClient:
             exa_request_ids=request_ids,
             partial_failures=partial_failures,
             estimated_cost_usd=estimated_cost_usd if estimated_cost_usd > 0 else None,
+            synthesis_provider=synthesis_provider,
+            synthesis_model=synthesis_model,
         )
         payload = DeepResearchResponse(
             question=normalized_question,
