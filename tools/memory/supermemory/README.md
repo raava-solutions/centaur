@@ -13,7 +13,7 @@ placeholder bearer token; iron-proxy resolves the real key for
 ### `write`
 
 Store text in Supermemory. Use `container_tag` to isolate project, thread, or
-deployment memory. The default container is `raava-centaur`.
+deployment memory. The default container is `raava-internal`.
 
 ### `recall`
 
@@ -22,4 +22,3 @@ Search Supermemory memories by natural-language query. The default limit is 5.
 ### `status`
 
 Check a document ingestion status by Supermemory document id.
-

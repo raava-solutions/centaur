@@ -15,8 +15,8 @@ class SupermemoryClient:
     def __init__(
         self,
         api_key: str | None = None,
-        base_url: str = "https://api.supermemory.ai/v3",
-        default_container_tag: str = "raava-centaur",
+        base_url: str = "https://api.supermemory.ai",
+        default_container_tag: str = "raava-internal",
         timeout: float = 60.0,
     ) -> None:
         self._api_key = api_key
@@ -95,7 +95,8 @@ class SupermemoryClient:
         """Write content into Supermemory.
 
         Use `container_tag` to isolate Raava project or Slack-thread memory
-        spaces. The default is a deployment-level `raava-centaur` container.
+        spaces. The default is Raava's deployment-level `raava-internal`
+        container.
         """
         normalized_content = content.strip()
         if not normalized_content:
@@ -112,7 +113,7 @@ class SupermemoryClient:
             payload["customId"] = custom_id
         data = self._request(
             "POST",
-            "/documents",
+            "/v3/documents",
             json_payload=payload,
             timeout_seconds=timeout_seconds,
         )
@@ -133,25 +134,30 @@ class SupermemoryClient:
         normalized_query = query.strip()
         if not normalized_query:
             raise RuntimeError("query cannot be empty.")
-        params: dict[str, Any] = {
+        payload: dict[str, Any] = {
             "q": normalized_query,
             "limit": max(1, min(int(limit), 20)),
             "containerTag": self._container_tags(container_tag)[0],
         }
         if threshold is not None:
-            params["threshold"] = threshold
+            payload["threshold"] = threshold
         include: dict[str, bool] = {}
         if include_documents:
             include["documents"] = True
         if include_summaries:
             include["summaries"] = True
         if include:
-            params["include"] = include
+            payload["include"] = include
 
-        data = self._request("GET", "/search", params=params, timeout_seconds=timeout_seconds)
+        data = self._request(
+            "POST",
+            "/v4/search",
+            json_payload=payload,
+            timeout_seconds=timeout_seconds,
+        )
         return {
             "query": normalized_query,
-            "container_tag": params["containerTag"],
+            "container_tag": payload["containerTag"],
             "results": data.get("results", []),
             "total": data.get("total"),
             "timing": data.get("timing"),
@@ -163,7 +169,11 @@ class SupermemoryClient:
         normalized_id = memory_id.strip()
         if not normalized_id:
             raise RuntimeError("memory_id cannot be empty.")
-        return self._request("GET", f"/documents/{normalized_id}", timeout_seconds=timeout_seconds)
+        return self._request(
+            "GET",
+            f"/v3/documents/{normalized_id}",
+            timeout_seconds=timeout_seconds,
+        )
 
     def capability(self) -> dict[str, Any]:
         """Return non-secret Supermemory bridge configuration."""
@@ -178,4 +188,3 @@ class SupermemoryClient:
 def _client() -> SupermemoryClient:
     """Factory for tool loader."""
     return SupermemoryClient()
-

@@ -233,7 +233,7 @@ kubectl -n centaur exec deploy/centaur-centaur-api -- sh -lc '
     -H "Authorization: Bearer ${LOCAL_DEV_API_KEY}" \
     -H "Content-Type: application/json" \
     http://localhost:8000/tools/supermemory/write \
-    -d "{\"content\":\"Centaur local Supermemory smoke $(date -u +%FT%TZ)\",\"container_tag\":\"raava-centaur-smoke\"}" | jq
+    -d "{\"content\":\"Centaur local Supermemory smoke $(date -u +%FT%TZ)\",\"container_tag\":\"raava-internal\"}" | jq
 '
 
 kubectl -n centaur exec deploy/centaur-centaur-api -- sh -lc '
@@ -241,7 +241,7 @@ kubectl -n centaur exec deploy/centaur-centaur-api -- sh -lc '
     -H "Authorization: Bearer ${LOCAL_DEV_API_KEY}" \
     -H "Content-Type: application/json" \
     http://localhost:8000/tools/supermemory/recall \
-    -d "{\"query\":\"Centaur local Supermemory smoke\",\"container_tag\":\"raava-centaur-smoke\",\"limit\":3}" | jq
+    -d "{\"query\":\"Centaur local Supermemory smoke\",\"container_tag\":\"raava-internal\",\"limit\":3}" | jq
 '
 ```
 

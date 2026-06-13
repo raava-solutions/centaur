@@ -449,6 +449,29 @@ class WebSearchClient:
         citations = self._extract_citation_ids(text)
         return {citation for citation in citations if citation not in valid}
 
+    def _append_missing_sources_section(
+        self,
+        report: str,
+        missing_source_ids: list[int],
+        sources: list[SourceDocument],
+        max_report_chars: int,
+    ) -> str:
+        source_by_id = {source.source_id: source for source in sources}
+        lines = []
+        for source_id in missing_source_ids:
+            source = source_by_id.get(source_id)
+            if source is None:
+                continue
+            lines.append(f"[{source.source_id}] {source.title} - {source.url}")
+        if not lines:
+            return report
+        separator = "\n" if report.endswith("\n") else "\n\n"
+        if re.search(r"##\s*Sources", report, flags=re.IGNORECASE):
+            repaired = f"{report.rstrip()}\n" + "\n".join(lines)
+        else:
+            repaired = f"{report.rstrip()}{separator}## Sources\n" + "\n".join(lines)
+        return repaired[:max_report_chars]
+
     def _exa_search_sync(self, payload: dict[str, Any], timeout_seconds: float) -> dict[str, Any]:
         with httpx.Client(base_url=self._exa_base_url, timeout=timeout_seconds) as client:
             for attempt in range(self._max_retries):
@@ -902,10 +925,20 @@ class WebSearchClient:
         if invalid_ids:
             raise RuntimeError(f"Citation validation failed. Invalid source IDs in report: {invalid_ids}")
         if missing_sources_ids:
-            raise RuntimeError(
-                "Citation validation failed. Sources section missing cited IDs: "
-                f"{missing_sources_ids}"
+            report = self._append_missing_sources_section(
+                report=report,
+                missing_source_ids=missing_sources_ids,
+                sources=sources,
+                max_report_chars=max_report_chars,
             )
+            cited_ids = self._extract_citation_ids(report)
+            source_section_ids = self._extract_sources_section_ids(report)
+            missing_sources_ids = sorted(cited_ids - source_section_ids)
+            if missing_sources_ids:
+                raise RuntimeError(
+                    "Citation validation failed. Sources section missing cited IDs: "
+                    f"{missing_sources_ids}"
+                )
         if not self._extract_citation_ids(report):
             raise RuntimeError("Citation validation failed. Report did not include source citations.")
         return report

@@ -29,7 +29,7 @@ def test_write_posts_document_with_container_tag(monkeypatch) -> None:
     assert calls == [
         (
             "POST",
-            "/documents",
+            "/v3/documents",
             None,
             {
                 "content": "remember this",
@@ -61,13 +61,12 @@ def test_recall_gets_search_with_bounded_limit(monkeypatch) -> None:
 
     assert calls == [
         (
-            "GET",
-            "/search",
-            {"q": "project context", "limit": 20, "containerTag": "raava"},
+            "POST",
+            "/v4/search",
             None,
+            {"q": "project context", "limit": 20, "containerTag": "raava"},
             None,
         )
     ]
     assert result["results"] == [{"documentId": "doc_1", "score": 0.9}]
     assert result["total"] == 1
-

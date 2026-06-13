@@ -99,3 +99,31 @@ def test_search_reports_missing_synthesis_provider_without_failing_retrieval(
     assert "OPENROUTER_API_KEY or ANTHROPIC_API_KEY" in result["meta"]["partial_failures"][0][
         "error"
     ]
+
+
+def test_validation_appends_missing_sources_section() -> None:
+    client = WebSearchClient(exa_api_key="exa-test", openrouter_api_key="openrouter-test")
+
+    async def fake_repair(**kwargs):
+        return kwargs["report"]
+
+    client._repair_report_citations = fake_repair  # type: ignore[method-assign]
+    sources = [
+        {
+            "source_id": 0,
+            "title": "Example source",
+            "url": "https://example.com/source",
+            "snippet": "Evidence",
+        }
+    ]
+    source_models = [client._normalize_source(source, 0) for source in sources]
+    report = _run(
+        client._validate_and_repair_citations(
+            report="A grounded answer [0].",
+            sources=[source for source in source_models if source is not None],
+            max_report_chars=2000,
+        )
+    )
+
+    assert "## Sources" in report
+    assert "[0] Example source - https://example.com/source" in report
