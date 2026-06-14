@@ -16,6 +16,15 @@ process, tool callback credentials, and network policy boundary.
 The command-line agent runtime that Centaur starts inside a sandbox runtime to
 turn a persisted user message into assistant output.
 
+### Harness Configuration
+
+The project-owned startup settings Centaur installs for a harness before it
+begins processing turns.
+
+Harness configuration is interpreted by the harness itself, so defaults may be
+selected by leaving a setting absent rather than by writing an explicit default
+value.
+
 ### Harness Auth Mode
 
 The credential posture a harness uses when it starts, such as mounted OAuth,

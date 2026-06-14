@@ -217,6 +217,9 @@ The Helm chart installs deny-by-default NetworkPolicies, then explicitly allows 
 
 ```
 centaur/
+├── CONCEPTS.md           # Shared domain vocabulary for Centaur-specific entities and concepts
+├── docs/
+│   └── solutions/        # docs/solutions/ documented solutions, organized by category with YAML frontmatter
 ├── services/
 │   ├── api/              # FastAPI control plane (standalone service)
 │   │   ├── api/          # Python package

@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tomllib
 from pathlib import Path
 
 
 ENTRYPOINT_SH = Path(__file__).resolve().parents[2] / "sandbox" / "entrypoint.sh"
+CODEX_HARNESS_CONFIG = Path(__file__).resolve().parents[3] / "harness" / "codex" / "config.toml"
 
 
 def _write_codex_harness_config(home: Path) -> Path:
@@ -135,3 +137,10 @@ def test_sandbox_entrypoint_installs_codex_harness_config(tmp_path: Path) -> Non
 
     assert result.returncode == 0, result.stderr or result.stdout
     assert result.stdout == (harness_dir / "codex" / "config.toml").read_text()
+
+
+def test_committed_codex_harness_config_uses_default_service_tier() -> None:
+    config = tomllib.loads(CODEX_HARNESS_CONFIG.read_text())
+
+    assert config["model_reasoning_effort"] == "medium"
+    assert "service_tier" not in config
