@@ -24,6 +24,10 @@ api:
   pluginWatcherEnabled: true
   egressDiscovery:
     enabled: false
+  # Local k3s sandboxes can be slow to reach Ready; give them more headroom
+  # than the upstream default so smoke/E2E turns don't time out on cold nodes.
+  extraEnv:
+    KUBERNETES_SANDBOX_READY_TIMEOUT_S: "180"
 
 ironProxy:
   image:
