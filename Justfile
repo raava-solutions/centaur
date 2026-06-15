@@ -69,6 +69,10 @@ deploy:
         --set onepasswordConnect.connect.create=true
       )
     fi
+    # Optional per-deployment values overlay (layered on top of the dev profile).
+    if [[ -n "${EXTRA_VALUES:-}" ]]; then
+      extra_args+=(-f "$EXTRA_VALUES")
+    fi
     helm upgrade --install {{release}} {{chart}} -n {{namespace}} --create-namespace -f {{dev_values}} ${extra_args[@]+"${extra_args[@]}"}
 
 up:
