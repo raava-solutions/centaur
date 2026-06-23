@@ -97,6 +97,22 @@ class RaavaGbrainClient:
             ],
         }
 
+    def read_page(self, path: str) -> dict[str, Any]:
+        if not self.base_url:
+            return self._offline_page(path)
+        remote = self._remote_tool("get_page", {"path": path})
+        if remote is not None:
+            return remote
+        return self._offline_page(path)
+
+    def _offline_page(self, path: str) -> dict[str, Any]:
+        return {
+            "source": "offline",
+            "path": path,
+            "unavailable": True,
+            "message": "Hosted gbrain page reads are unavailable in this environment.",
+        }
+
     def _remote_query(self, query: str, *, limit: int | None = None) -> dict[str, Any] | None:
         payload: dict[str, Any] = {"query": query}
         if limit is not None:
