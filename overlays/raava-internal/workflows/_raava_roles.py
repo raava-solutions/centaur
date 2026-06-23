@@ -117,6 +117,8 @@ SPECIALISTS: dict[str, Specialist] = {
     ),
 }
 
+STANDALONE_PERSONAS: frozenset[str] = frozenset({"outreach-operator"})
+
 ROLE_REDIRECTS: dict[str, str] = {
     "darnell": "enoch",
     "alice": "priya",
@@ -140,6 +142,7 @@ CHANNEL_DEFAULTS: dict[str, str] = {
     "eng": "enoch",
     "dev": "enoch",
     "gtm": "elena",
+    "raava-outreach": "outreach-operator",
     "sales": "elena",
     "marketing": "elena",
     "finance": "heathcliffe",
@@ -196,6 +199,8 @@ def resolve_role(value: str | None) -> dict[str, str] | None:
             "persona": ROLE_REDIRECTS[role],
             "kind": "redirected_role",
         }
+    if role in STANDALONE_PERSONAS:
+        return {"requested": role, "persona": role, "kind": "standalone_persona"}
     return None
 
 
@@ -239,7 +244,10 @@ def _configured_channel_defaults() -> dict[str, str]:
     for channel, persona in pairs:
         normalized_channel = normalize(str(channel))
         normalized_persona = normalize(str(persona))
-        if normalized_channel and normalized_persona in FUNCTION_LEADS:
+        if normalized_channel and (
+            normalized_persona in FUNCTION_LEADS
+            or normalized_persona in STANDALONE_PERSONAS
+        ):
             parsed[normalized_channel] = normalized_persona
     return parsed
 

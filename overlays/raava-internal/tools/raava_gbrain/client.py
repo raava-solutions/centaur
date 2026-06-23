@@ -97,6 +97,9 @@ class RaavaGbrainClient:
             ],
         }
 
+    def lookup(self, query: str, limit: int = 5) -> dict[str, Any]:
+        return self.search_decisions(query, limit=limit)
+
     def read_page(self, path: str) -> dict[str, Any]:
         if not self.base_url:
             return self._offline_page(path)
@@ -104,6 +107,46 @@ class RaavaGbrainClient:
         if remote is not None:
             return remote
         return self._offline_page(path)
+
+    def write_learning(
+        self,
+        summary: str,
+        *,
+        title: str | None = None,
+        path: str | None = None,
+        tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        # Match read_page/search_decisions: gate only on base_url and let
+        # _remote_tool/_bearer_token resolve auth (static key OR OAuth). The
+        # earlier `bool(self.api_key)` pre-check silently dropped writes on
+        # OAuth-only deployments, which are the documented primary auth path.
+        if not self.base_url:
+            return {
+                "written": False,
+                "reason": "gbrain unavailable",
+            }
+
+        arguments: dict[str, Any] = {"summary": summary}
+        if title:
+            arguments["title"] = title
+        if path:
+            arguments["path"] = path
+        if tags:
+            arguments["tags"] = tags
+        if metadata:
+            arguments["metadata"] = metadata
+
+        remote = self._remote_tool("add_timeline_entry", arguments)
+        if remote is None:
+            return {
+                "written": False,
+                "reason": "gbrain unavailable",
+            }
+        return {
+            "written": True,
+            "result": remote,
+        }
 
     def _offline_page(self, path: str) -> dict[str, Any]:
         return {

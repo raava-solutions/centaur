@@ -95,7 +95,10 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
     for index, specialist in enumerate(inp.specialists, start=1):
         role = _roles.normalize(str(specialist.get("role") or ""))
         role_info = _roles.resolve_role(role)
-        if role_info is None or role_info["kind"] == "function_lead":
+        if role_info is None or role_info["kind"] in (
+            "function_lead",
+            "standalone_persona",
+        ):
             raise ControlPlaneError(
                 "INVALID_RAAVA_SPECIALIST",
                 f"specialist role must be private or redirected: {role}",
