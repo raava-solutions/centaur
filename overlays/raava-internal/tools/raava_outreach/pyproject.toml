@@ -1,9 +1,9 @@
 [project]
 name = "raava-outreach"
-description = "Raava outreach loop CLI surface — subprocess shell-out to the raava-outreach binary"
+description = "Raava outreach loop discovery surface over the worker HTTP bridge"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["httpx"]
 
 [build-system]
 requires = ["hatchling"]
@@ -11,4 +11,6 @@ build-backend = "hatchling.build"
 
 [tool.centaur]
 module = "client.py"
-secrets = []
+secrets = [
+    {type = "http", name = "RAAVA_OUTREACH_HTTP_TOKEN", match_headers = ["Authorization"], hosts = ["host.docker.internal"]},
+]

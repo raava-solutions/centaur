@@ -1,18 +1,13 @@
-"""Tests for the raava_outreach CLI client.
+"""Tests for the raava_outreach HTTP discovery client.
 
-All subprocess calls are mocked — no live CLI invocations.
-
-Import note: conftest.py at overlays/raava-internal/conftest.py inserts both
-the repo root (for centaur_sdk) and the overlay tools dir (for raava_outreach)
-onto sys.path, so plain "from raava_outreach.client import ..." works.
+All HTTP calls use httpx MockTransport — no live network.
 """
 
 import json
-import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
+import httpx
 import pytest
 
 # Fallback: ensure the overlay tools dir is on path even when running this
@@ -29,17 +24,28 @@ if _REPO_ROOT not in sys.path:
 from raava_outreach.client import RaavaOutreachClient  # noqa: E402
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+def _client(handler) -> RaavaOutreachClient:
+    client = RaavaOutreachClient()
+    client._client = httpx.Client(
+        base_url="http://host.docker.internal:8770",
+        headers={
+            "Authorization": "Bearer test-token",
+            "Content-Type": "application/json",
+        },
+        transport=httpx.MockTransport(handler),
+    )
+    return client
 
-def _make_result(stdout: str = "", stderr: str = "", returncode: int = 0):
-    return SimpleNamespace(stdout=stdout, stderr=stderr, returncode=returncode)
+
+def _request_json(request: httpx.Request) -> dict:
+    request.read()
+    return json.loads(request.content)
 
 
 # ---------------------------------------------------------------------------
 # Safety: approve() and send_approved() must NOT exist on the client
 # ---------------------------------------------------------------------------
+
 
 def test_approve_method_absent():
     """approve() must not be exposed — only the operator's outreach_send can send."""
@@ -60,77 +66,118 @@ def test_send_approved_method_absent():
 
 
 # ---------------------------------------------------------------------------
-# Happy-path: queue
+# Happy paths: exact discovery HTTP routes and shapes
 # ---------------------------------------------------------------------------
 
-def test_queue_parses_json(monkeypatch):
-    payload = {"entries": [{"id": "abc", "status": "pending", "company": "Acme"}]}
 
-    def mock_run(cmd, **kwargs):
-        assert "--status" in cmd
-        assert "pending" in cmd
-        assert "--format" in cmd
-        assert "json" in cmd
-        return _make_result(stdout=json.dumps(payload))
+def test_produce_posts_dry_run():
+    payload = {"campaign": "q3-roofing", "drafts": 5}
 
-    monkeypatch.setattr(subprocess, "run", mock_run)
-    client = RaavaOutreachClient()
-    result = client.queue(status="pending")
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/produce"
+        assert _request_json(request) == {"dry_run": True}
+        assert request.headers["Authorization"] == "Bearer test-token"
+        return httpx.Response(200, request=request, json=payload)
+
+    result = _client(handler).produce(dry_run=True)
     assert result == payload
 
 
+def test_queue_posts_filters_and_returns_queue():
+    payload = {"queue": [{"id": "abc", "status": "pending", "company": "Acme"}]}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/queue"
+        assert _request_json(request) == {"status": "pending", "track": "gtm"}
+        return httpx.Response(200, request=request, json=payload)
+
+    assert _client(handler).queue(status="pending", track="gtm") == payload
+
+
+def test_queue_posts_null_filters_by_default():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/queue"
+        assert _request_json(request) == {"status": None, "track": None}
+        return httpx.Response(200, request=request, json={"queue": []})
+
+    assert _client(handler).queue() == {"queue": []}
+
+
+def test_triage_posts_empty_body_and_returns_triage():
+    payload = {"triage": [{"id": "abc", "score": 92}]}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/triage"
+        assert _request_json(request) == {}
+        return httpx.Response(200, request=request, json=payload)
+
+    assert _client(handler).triage() == payload
+
+
+def test_preflight_posts_empty_body_and_returns_checks():
+    payload = {"checks": [{"name": "slack", "ok": True}], "ready": True}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/preflight"
+        assert _request_json(request) == {}
+        return httpx.Response(200, request=request, json=payload)
+
+    assert _client(handler).preflight() == payload
+
+
+def test_curation_audit_posts_empty_body_and_returns_audit():
+    payload = {"count": 1, "drops": [{"entry_id": "drop-1"}]}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/curation-audit"
+        assert _request_json(request) == {}
+        return httpx.Response(200, request=request, json=payload)
+
+    assert _client(handler).curation_audit() == payload
+
+
+def test_reject_posts_entry_id_and_returns_result():
+    payload = {"ok": True, "result": {"entry_id": "abc", "status": "rejected"}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/reject"
+        assert _request_json(request) == {"entry_id": "abc"}
+        return httpx.Response(200, request=request, json=payload)
+
+    assert _client(handler).reject("abc") == payload
+
+
 # ---------------------------------------------------------------------------
-# Happy-path: produce
+# Error handling: HTTP/transport/JSON failures surface as RuntimeError
 # ---------------------------------------------------------------------------
 
-def test_produce_dry_run_parses_json(monkeypatch):
-    payload = {"campaign": "q3-roofing", "drafts": 5}
 
-    def mock_run(cmd, **kwargs):
-        assert "--dry-run" in cmd
-        assert "--format" in cmd
-        return _make_result(stdout=json.dumps(payload))
+def test_non_2xx_raises_runtime_error_with_structured_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, request=request, json={"error": "DB connection failed"})
 
-    monkeypatch.setattr(subprocess, "run", mock_run)
-    client = RaavaOutreachClient()
-    result = client.produce(dry_run=True)
-    assert result["campaign"] == "q3-roofing"
-    assert result["drafts"] == 5
+    with pytest.raises(RuntimeError, match="DB connection failed"):
+        _client(handler).queue()
 
 
-# ---------------------------------------------------------------------------
-# Edge: non-zero exit surfaces as RuntimeError, not a crash
-# ---------------------------------------------------------------------------
+def test_transport_error_raises_runtime_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
 
-def test_queue_nonzero_exit_raises(monkeypatch):
-    def mock_run(cmd, **kwargs):
-        return _make_result(stdout="", stderr="DB connection failed", returncode=1)
-
-    monkeypatch.setattr(subprocess, "run", mock_run)
-    client = RaavaOutreachClient()
-    with pytest.raises(RuntimeError, match="failed"):
-        client.queue()
+    with pytest.raises(RuntimeError, match="transport error"):
+        _client(handler).produce()
 
 
-def test_produce_nonzero_exit_raises(monkeypatch):
-    def mock_run(cmd, **kwargs):
-        return _make_result(stdout="", stderr="error: missing campaign", returncode=2)
+def test_bad_json_raises_runtime_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, request=request, text="this is not json")
 
-    monkeypatch.setattr(subprocess, "run", mock_run)
-    client = RaavaOutreachClient()
-    with pytest.raises(RuntimeError):
-        client.produce()
-
-
-# ---------------------------------------------------------------------------
-# Edge: unparseable JSON raises RuntimeError
-# ---------------------------------------------------------------------------
-
-def test_queue_bad_json_raises(monkeypatch):
-    def mock_run(cmd, **kwargs):
-        return _make_result(stdout="this is not json", returncode=0)
-
-    monkeypatch.setattr(subprocess, "run", mock_run)
-    client = RaavaOutreachClient()
     with pytest.raises(RuntimeError, match="JSON"):
-        client.queue()
+        _client(handler).queue()
