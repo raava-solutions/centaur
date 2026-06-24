@@ -26,10 +26,7 @@ _REPO_ROOT = str(Path(__file__).resolve().parents[3])
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from raava_outreach.client import (  # noqa: E402
-    RaavaOutreachClient,
-    _parse_send_approved_output,
-)
+from raava_outreach.client import RaavaOutreachClient  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -38,6 +35,28 @@ from raava_outreach.client import (  # noqa: E402
 
 def _make_result(stdout: str = "", stderr: str = "", returncode: int = 0):
     return SimpleNamespace(stdout=stdout, stderr=stderr, returncode=returncode)
+
+
+# ---------------------------------------------------------------------------
+# Safety: approve() and send_approved() must NOT exist on the client
+# ---------------------------------------------------------------------------
+
+def test_approve_method_absent():
+    """approve() must not be exposed — only the operator's outreach_send can send."""
+    client = RaavaOutreachClient()
+    assert not hasattr(client, "approve"), (
+        "RaavaOutreachClient must NOT expose approve(); "
+        "sending authority belongs to outreach_send only"
+    )
+
+
+def test_send_approved_method_absent():
+    """send_approved() must not be exposed — only the operator's outreach_send can send."""
+    client = RaavaOutreachClient()
+    assert not hasattr(client, "send_approved"), (
+        "RaavaOutreachClient must NOT expose send_approved(); "
+        "sending authority belongs to outreach_send only"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -80,94 +99,6 @@ def test_produce_dry_run_parses_json(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Happy-path: approve
-# ---------------------------------------------------------------------------
-
-def test_approve_by_id(monkeypatch):
-    def mock_run(cmd, **kwargs):
-        assert "approve" in cmd
-        assert "entry-42" in cmd
-        assert "--all" not in cmd
-        return _make_result(stdout="approved entry-42")
-
-    monkeypatch.setattr(subprocess, "run", mock_run)
-    client = RaavaOutreachClient()
-    result = client.approve(entry_id="entry-42")
-    assert result["raw"] == "approved entry-42"
-
-
-def test_approve_all(monkeypatch):
-    def mock_run(cmd, **kwargs):
-        assert "--all" in cmd
-        return _make_result(stdout="approved 3 entries")
-
-    monkeypatch.setattr(subprocess, "run", mock_run)
-    client = RaavaOutreachClient()
-    result = client.approve(all=True)
-    assert "3" in result["raw"]
-
-
-# ---------------------------------------------------------------------------
-# Happy-path: send_approved
-# ---------------------------------------------------------------------------
-
-def test_send_approved_parses_summary(monkeypatch):
-    summary = "sent=2 blocked=0 skipped=1 (of 3 approved)"
-
-    def mock_run(cmd, **kwargs):
-        assert "send-approved" in cmd
-        return _make_result(stdout=summary)
-
-    monkeypatch.setattr(subprocess, "run", mock_run)
-    client = RaavaOutreachClient()
-    result = client.send_approved()
-    assert result["sent"] == 2
-    assert result["blocked"] == 0
-    assert result["skipped"] == 1
-    assert result["approved_total"] == 3
-
-
-def test_send_approved_with_cap(monkeypatch):
-    summary = "sent=1 blocked=0 skipped=0 (of 1 approved)"
-
-    def mock_run(cmd, **kwargs):
-        assert "--cap" in cmd
-        assert "5" in cmd
-        return _make_result(stdout=summary)
-
-    monkeypatch.setattr(subprocess, "run", mock_run)
-    client = RaavaOutreachClient()
-    result = client.send_approved(cap=5)
-    assert result["sent"] == 1
-
-
-# ---------------------------------------------------------------------------
-# Mandatory guard-binding test:
-# When the CLI reports blocked > 0 and sent == 0, the tool surfaces that
-# faithfully — it cannot override the loop's send guards.
-# ---------------------------------------------------------------------------
-
-def test_send_approved_guard_binding_blocked(monkeypatch):
-    """The tool must surface 'blocked' when the loop guard fires.
-
-    The loop's guards (proof_cleared, bench, cap, suppression) can block sends.
-    This test asserts the tool surfaces blocked=1, sent=0 — it does NOT silently
-    report a send that didn't happen and cannot override the guard.
-    """
-    guard_output = "sent=0 blocked=1 skipped=0 (of 1 approved)"
-
-    def mock_run(cmd, **kwargs):
-        return _make_result(stdout=guard_output)
-
-    monkeypatch.setattr(subprocess, "run", mock_run)
-    client = RaavaOutreachClient()
-    result = client.send_approved()
-
-    assert result["sent"] == 0, "Tool must NOT report a send when the guard blocked it"
-    assert result["blocked"] == 1, "Tool must surface the blocked count from the loop guard"
-
-
-# ---------------------------------------------------------------------------
 # Edge: non-zero exit surfaces as RuntimeError, not a crash
 # ---------------------------------------------------------------------------
 
@@ -203,14 +134,3 @@ def test_queue_bad_json_raises(monkeypatch):
     client = RaavaOutreachClient()
     with pytest.raises(RuntimeError, match="JSON"):
         client.queue()
-
-
-# ---------------------------------------------------------------------------
-# Unit: _parse_send_approved_output edge cases
-# ---------------------------------------------------------------------------
-
-def test_parse_send_approved_partial_line():
-    result = _parse_send_approved_output("sent=0 blocked=2 skipped=0 (of 2 approved)")
-    assert result["sent"] == 0
-    assert result["blocked"] == 2
-    assert result["approved_total"] == 2

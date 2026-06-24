@@ -1,5 +1,9 @@
 """Raava outreach loop surface — subprocess shell-out to the raava-outreach CLI.
 
+Discovery and curation ONLY. This tool cannot send email; sending is the
+exclusive province of the outreach_send tool, used only by the GTM operator
+on an explicit human "go."
+
 The loop binary keeps its own DB/email/Slack secrets in its own environment.
 This tool only shells out to it and parses the output; it never imports loop
 modules in-process.
@@ -13,7 +17,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 from typing import Any
 
@@ -53,36 +56,13 @@ def _parse_text(result: subprocess.CompletedProcess, context: str) -> dict[str, 
     return {"raw": result.stdout.strip()}
 
 
-def _parse_send_approved_output(stdout: str) -> dict[str, Any]:
-    """Parse the text summary line from send_approved.
-
-    Expected format (approximate):
-        sent=2 blocked=1 skipped=0 (of 3 approved)
-    """
-    raw = stdout.strip()
-    result: dict[str, Any] = {"raw": raw}
-
-    # Extract key=value pairs
-    for key in ("sent", "blocked", "skipped"):
-        m = re.search(rf"{key}=(\d+)", raw)
-        if m:
-            result[key] = int(m.group(1))
-
-    # Extract total approved
-    m = re.search(r"of\s+(\d+)\s+approved", raw)
-    if m:
-        result["approved_total"] = int(m.group(1))
-
-    return result
-
-
 class RaavaOutreachClient:
-    """Safe subprocess surface over the raava-outreach CLI.
+    """Safe subprocess surface over the raava-outreach CLI — discovery only.
 
-    The tool faithfully exposes all loop commands including approve/send_approved.
-    The never-send-unless-explicitly-told rule lives in the outreach-operator
-    persona (PROMPT.md), not here by method omission.  The loop's own send guards
-    (proof_cleared, bench, cap, suppression) remain the technical backstop.
+    Exposes produce/queue/triage/preflight/curation_audit/reject.
+    approve() and send_approved() are intentionally absent: this tool cannot
+    send email. Sending is performed exclusively by the outreach_send tool
+    at the GTM operator's explicit request.
     """
 
     # ------------------------------------------------------------------ #
@@ -182,53 +162,6 @@ class RaavaOutreachClient:
         """
         result = _run(["reject", str(entry_id)])
         return _parse_text(result, f"reject {entry_id}")
-
-    # ------------------------------------------------------------------ #
-    # Approve
-    # ------------------------------------------------------------------ #
-
-    def approve(self, entry_id: str | None = None, all: bool = False) -> dict[str, Any]:
-        """Approve one or all outreach entries.
-
-        Args:
-            entry_id: The specific queue entry ID to approve.
-            all: If True, approve all pending entries (entry_id is ignored).
-
-        Returns:
-            Dict with "raw" key containing CLI text output.
-        """
-        if all:
-            args = ["approve", "--all"]
-        elif entry_id is not None:
-            args = ["approve", str(entry_id)]
-        else:
-            raise ValueError("approve() requires either entry_id or all=True")
-        result = _run(args)
-        return _parse_text(result, "approve")
-
-    # ------------------------------------------------------------------ #
-    # Send approved
-    # ------------------------------------------------------------------ #
-
-    def send_approved(self, cap: int | None = None) -> dict[str, Any]:
-        """Send all approved outreach entries (subject to loop guards).
-
-        The loop enforces its own send guards (proof_cleared, bench, suppression,
-        cap) regardless of what this method requests.  If the guard blocks a send
-        the returned dict will have blocked > 0 and sent == 0 for that entry.
-
-        Args:
-            cap: Maximum number of sends in this run.
-
-        Returns:
-            Dict with "raw", "sent", "blocked", "skipped", "approved_total" keys.
-        """
-        args = ["send-approved"]
-        if cap is not None:
-            args += ["--cap", str(cap)]
-        result = _run(args)
-        _require_ok(result, "send-approved")
-        return _parse_send_approved_output(result.stdout)
 
 
 def _client() -> RaavaOutreachClient:

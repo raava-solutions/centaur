@@ -29,3 +29,19 @@ def test_prompt_locks_send_rule():
     assert "never auto-send" in prompt
     assert "ambiguous" in prompt
     assert "never send on your own initiative" in prompt
+
+
+def test_prompt_routes_send_only_through_outreach_send():
+    prompt = (PERSONA_DIR / "PROMPT.md").read_text().lower()
+
+    # The gated sender is the only transport; the loop/discovery tool cannot send.
+    assert "outreach_send" in prompt
+    assert "cannot send" in prompt
+    assert "only sender" in prompt
+
+
+def test_prompt_captures_feedback_on_no():
+    prompt = (PERSONA_DIR / "PROMPT.md").read_text().lower()
+
+    assert "supermemory" in prompt
+    assert "feedback" in prompt

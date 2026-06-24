@@ -8,6 +8,9 @@ origin: ../../raava-outreach/docs/brainstorms/2026-06-23-outreach-operator-agent
 
 # feat: Outreach operator persona on Centaur
 
+> **⚠️ Architecture correction (2026-06-24) — supersedes Decision 1 ("the deterministic loop does … sending") and the KTD "send gated at the persona, not omitted."**
+> A build harness ran the loop with live AgentMail creds and emitted 6 test emails to a real domain (all bounced — no prospect reached). Root cause: *send lived in the worker behind an in-band gate.* Corrected model: **the loop/worker and its Centaur `raava_outreach` tool hold NO send capability and NO email creds; "send" exists solely as a GTM-operator action, fired only on the human's explicit "go."** Daily cadence: routine drafts → report → GTM persona surfaces it in Slack → human go/no → GTM crafts+sends (go) or captures feedback to memory (no). Governing principle [brain: `concepts/reference/harness-engineering`] — no production writes from the worker; consequential/irreversible actions are policy-gated and owned by the accountable seat. Full model: brain `concepts/engineering/outreach-send-authority-model`.
+
 **Target repo:** `centaur` — all work lands in `overlays/raava-internal/` (the existing Raava overlay; the role registry is already built). Wraps the `raava-outreach` CLI as a Centaur tool. Origin: the outreach-operator requirements doc (see origin).
 
 ## Summary
