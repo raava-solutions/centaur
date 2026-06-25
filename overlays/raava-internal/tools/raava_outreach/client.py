@@ -20,7 +20,7 @@ _DEFAULT_BASE_URL = "http://host.docker.internal:8770"
 class RaavaOutreachClient:
     """Safe HTTP surface over the raava-outreach worker — discovery only.
 
-    Exposes produce/queue/triage/preflight/curation_audit/reject.
+    Exposes produce/queue/draft/triage/preflight/curation_audit/reject/mark_handled.
     approve() and send_approved() are intentionally absent: this tool cannot
     send email. Sending is performed exclusively by the outreach_send tool
     at the GTM operator's explicit request.
@@ -120,6 +120,26 @@ class RaavaOutreachClient:
         )
 
     # ------------------------------------------------------------------ #
+    # Draft
+    # ------------------------------------------------------------------ #
+
+    def draft(self, entry_id: str) -> dict[str, Any]:
+        """Fetch the fresh full draft for a queued outreach entry.
+
+        Args:
+            entry_id: The queue entry ID to fetch.
+
+        Returns:
+            Parsed JSON dict from the worker discovery service.
+        """
+        return self._request(
+            "POST",
+            "/draft",
+            context=f"draft {entry_id}",
+            json={"entry_id": str(entry_id)},
+        )
+
+    # ------------------------------------------------------------------ #
     # Triage
     # ------------------------------------------------------------------ #
 
@@ -173,6 +193,30 @@ class RaavaOutreachClient:
             "/reject",
             context=f"reject {entry_id}",
             json={"entry_id": str(entry_id)},
+        )
+
+    # ------------------------------------------------------------------ #
+    # Mark handled
+    # ------------------------------------------------------------------ #
+
+    def mark_handled(self, entry_id: str, outcome: str) -> dict[str, Any]:
+        """Record the terminal human outcome for an outreach entry.
+
+        The bridge route enforces the allowed outcomes. This client exposes
+        bookkeeping only; it does not approve or send.
+
+        Args:
+            entry_id: The queue entry ID to mark.
+            outcome: Terminal outcome, usually "delivered" or "rejected".
+
+        Returns:
+            Parsed JSON dict from the worker discovery service.
+        """
+        return self._request(
+            "POST",
+            "/mark-handled",
+            context=f"mark-handled {entry_id}",
+            json={"entry_id": str(entry_id), "outcome": str(outcome)},
         )
 
 

@@ -17,7 +17,7 @@ _TOOLS_DIR = str(Path(__file__).resolve().parents[1])
 if _TOOLS_DIR not in sys.path:
     sys.path.insert(0, _TOOLS_DIR)
 
-_REPO_ROOT = str(Path(__file__).resolve().parents[3])
+_REPO_ROOT = str(Path(__file__).resolve().parents[4])
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
@@ -65,6 +65,12 @@ def test_send_approved_method_absent():
     )
 
 
+def test_send_method_absent():
+    """send() must not be exposed on the worker bridge client."""
+    client = RaavaOutreachClient()
+    assert not hasattr(client, "send")
+
+
 # ---------------------------------------------------------------------------
 # Happy paths: exact discovery HTTP routes and shapes
 # ---------------------------------------------------------------------------
@@ -104,6 +110,28 @@ def test_queue_posts_null_filters_by_default():
         return httpx.Response(200, request=request, json={"queue": []})
 
     assert _client(handler).queue() == {"queue": []}
+
+
+def test_draft_posts_entry_id_and_returns_full_draft():
+    payload = {
+        "entry_id": "q-123",
+        "draft": {
+            "to": "buyer@example.com",
+            "subject": "Roofing crews",
+            "body": "Fresh body",
+            "cc": ["ops@example.com"],
+        },
+        "suppression": {"suppressed": False, "already_sent": False},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/draft"
+        assert _request_json(request) == {"entry_id": "q-123"}
+        assert request.headers["Authorization"] == "Bearer test-token"
+        return httpx.Response(200, request=request, json=payload)
+
+    assert _client(handler).draft("q-123") == payload
 
 
 def test_triage_posts_empty_body_and_returns_triage():
@@ -152,6 +180,19 @@ def test_reject_posts_entry_id_and_returns_result():
         return httpx.Response(200, request=request, json=payload)
 
     assert _client(handler).reject("abc") == payload
+
+
+def test_mark_handled_posts_entry_id_and_outcome():
+    payload = {"ok": True, "entry_id": "abc", "outcome": "delivered", "status": "delivered"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/mark-handled"
+        assert _request_json(request) == {"entry_id": "abc", "outcome": "delivered"}
+        assert request.headers["Authorization"] == "Bearer test-token"
+        return httpx.Response(200, request=request, json=payload)
+
+    assert _client(handler).mark_handled("abc", "delivered") == payload
 
 
 # ---------------------------------------------------------------------------
