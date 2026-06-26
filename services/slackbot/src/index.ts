@@ -516,7 +516,7 @@ async function processSlackEvent(envelope: SlackEnvelope): Promise<void> {
     client
   })
   if (!normalized) return
-  if (!normalized.is_mention) return
+  if (!normalized.should_respond) return
 
   if (shouldAckWithReaction(normalized)) {
     await ackWithReaction(client, normalized)

@@ -38,6 +38,8 @@ describe('CentaurHandoff', () => {
         channel_id: 'C123',
         thread_ts: '1778883099.579529',
         is_mention: true,
+        is_direct_message: false,
+        should_respond: true,
         parts: [{ type: 'text', text: 'hello' }],
         slack: {
           event_id: 'Ev-envelope-one',
@@ -85,6 +87,8 @@ describe('CentaurHandoff', () => {
         channel_id: 'C123',
         thread_ts: '1778883099.579529',
         is_mention: true,
+        is_direct_message: false,
+        should_respond: true,
         parts: [
           { type: 'text', text: 'review this' },
           {
@@ -149,6 +153,8 @@ describe('CentaurHandoff', () => {
         channel_id: 'C123',
         thread_ts: '1778883099.579529',
         is_mention: true,
+        is_direct_message: false,
+        should_respond: true,
         parts: [{ type: 'text', text: 'hello' }],
         slack: {
           event_ts: '1778883100.000000',

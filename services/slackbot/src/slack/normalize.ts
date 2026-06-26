@@ -96,17 +96,30 @@ export async function normalizeSlackEnvelope(opts: {
   const isMention =
     event.type === 'app_mention' ||
     Boolean(opts.botUserId && messageMentionsBot(event, opts.botUserId))
-  const historyMessages = isMention
-    ? await collectThreadHistorySafely({
-        client: opts.client,
-        channel: event.channel,
-        threadTs,
-        currentTs: event.ts,
-        teamId,
-        botUserId: opts.botUserId,
-        botId: opts.botId
-      })
-    : []
+  const isDirectMessage = event.channel_type === 'im'
+  const isThreadReply = event.ts !== threadTs
+
+  // Fetch thread history for non-DM thread replies. It provides conversation
+  // context and lets us detect whether Centaur is already engaged in the
+  // thread (a prior assistant message). DMs always respond and carry context
+  // through the durable transcript, so they skip this extra Slack call.
+  const historyMessages =
+    isThreadReply && !isDirectMessage
+      ? await collectThreadHistorySafely({
+          client: opts.client,
+          channel: event.channel,
+          threadTs,
+          currentTs: event.ts,
+          teamId,
+          botUserId: opts.botUserId,
+          botId: opts.botId
+        })
+      : []
+  const botEngagedInThread = historyMessages.some(message => message.role === 'assistant')
+
+  // Respond when explicitly mentioned, in a direct message, or as a follow-up
+  // in a thread Centaur is already participating in (no re-mention required).
+  const shouldRespond = isMention || isDirectMessage || botEngagedInThread
 
   return {
     thread_key: `slack:${teamId}:${event.channel}:${threadTs}`,
@@ -117,6 +130,8 @@ export async function normalizeSlackEnvelope(opts: {
     channel_id: event.channel,
     thread_ts: threadTs,
     is_mention: isMention,
+    is_direct_message: isDirectMessage,
+    should_respond: shouldRespond,
     parts,
     ...(historyMessages.length ? { history_messages: historyMessages } : {}),
     slack: {

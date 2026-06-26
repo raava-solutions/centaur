@@ -61,6 +61,8 @@ function baseEvent(overrides: Partial<NormalizedSlackEvent> = {}): NormalizedSla
     channel_id: 'C',
     thread_ts: '1.0',
     is_mention: true,
+    is_direct_message: false,
+    should_respond: true,
     parts: [{ type: 'text', text: 'thanks!' }],
     history_messages: [
       {

@@ -540,4 +540,117 @@ describe('normalizeSlackEnvelope', () => {
     expect(normalized?.parts).toEqual([{ type: 'text', text: '--invest pick this up' }])
     expect(normalized?.history_messages).toBeUndefined()
   })
+
+  it('does not respond to a non-mention top-level channel message', async () => {
+    const normalized = await normalizeSlackEnvelope({
+      envelope: {
+        type: 'event_callback',
+        team_id: 'T123',
+        event_id: 'Ev-channel-chatter',
+        event: {
+          type: 'message',
+          user: 'U123',
+          channel: 'C123',
+          channel_type: 'channel',
+          ts: '1778875070.942789',
+          text: 'just chatting with the team'
+        }
+      },
+      botUserId: 'UBOT',
+      client
+    })
+
+    expect(normalized?.is_mention).toBe(false)
+    expect(normalized?.should_respond).toBe(false)
+  })
+
+  it('responds to a direct message without a mention', async () => {
+    const normalized = await normalizeSlackEnvelope({
+      envelope: {
+        type: 'event_callback',
+        team_id: 'T123',
+        event_id: 'Ev-dm',
+        event: {
+          type: 'message',
+          user: 'U123',
+          channel: 'D123',
+          channel_type: 'im',
+          ts: '1778875070.942789',
+          text: 'hey can you help'
+        }
+      },
+      botUserId: 'UBOT',
+      client
+    })
+
+    expect(normalized?.is_mention).toBe(false)
+    expect(normalized?.is_direct_message).toBe(true)
+    expect(normalized?.should_respond).toBe(true)
+  })
+
+  it('responds to a non-mention thread reply when Centaur already replied', async () => {
+    const replies = mock(async () => ({
+      ok: true,
+      messages: [
+        { type: 'message', user: 'U123', ts: '1778875060.000100', text: '<@UBOT> start' },
+        { type: 'message', user: 'UBOT', ts: '1778875065.000200', text: 'On it.' }
+      ]
+    }))
+
+    const normalized = await normalizeSlackEnvelope({
+      envelope: {
+        type: 'event_callback',
+        team_id: 'T123',
+        event_id: 'Ev-thread-followup',
+        event: {
+          type: 'message',
+          user: 'U123',
+          channel: 'C123',
+          channel_type: 'channel',
+          thread_ts: '1778875060.000100',
+          ts: '1778875070.942789',
+          text: 'and what about the second one?'
+        }
+      },
+      botUserId: 'UBOT',
+      botId: 'BBOT',
+      client: { token: 'xoxb-test-token', conversations: { replies } } as any
+    })
+
+    expect(normalized?.is_mention).toBe(false)
+    expect(normalized?.should_respond).toBe(true)
+  })
+
+  it('ignores a non-mention thread reply when Centaur is not engaged', async () => {
+    const replies = mock(async () => ({
+      ok: true,
+      messages: [
+        { type: 'message', user: 'U123', ts: '1778875060.000100', text: 'hey team' },
+        { type: 'message', user: 'U456', ts: '1778875065.000200', text: 'replying' }
+      ]
+    }))
+
+    const normalized = await normalizeSlackEnvelope({
+      envelope: {
+        type: 'event_callback',
+        team_id: 'T123',
+        event_id: 'Ev-thread-no-bot',
+        event: {
+          type: 'message',
+          user: 'U123',
+          channel: 'C123',
+          channel_type: 'channel',
+          thread_ts: '1778875060.000100',
+          ts: '1778875070.942789',
+          text: 'unrelated follow-up'
+        }
+      },
+      botUserId: 'UBOT',
+      botId: 'BBOT',
+      client: { token: 'xoxb-test-token', conversations: { replies } } as any
+    })
+
+    expect(normalized?.is_mention).toBe(false)
+    expect(normalized?.should_respond).toBe(false)
+  })
 })
