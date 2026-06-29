@@ -93,6 +93,8 @@ spec:
           port: 443
         - protocol: UDP
           port: 7844
+        - protocol: TCP
+          port: 7844
     - to:
         - namespaceSelector:
             matchLabels:
