@@ -577,3 +577,156 @@ After the app is installed in the Raava workspace:
 4. Try an explicit lead selector such as `--vivian`.
 5. Try a private specialist selector such as `--hana`; the answer should be
    owned by the relevant function lead.
+
+## Proxmox Migration — Phase A (k3s host VM)
+
+Foundation for moving Centaur off the Mac Studio Kind cluster onto the Proxmox
+cluster (`pve-01`/`pve-02` + Pi QDevice). Covers plan units U1 (VM provision),
+U2 (auto-restart — interim) and U3 (k3s + agent-sandbox). Plan:
+`docs/plans/2026-06-29-001-feat-centaur-proxmox-migration-plan.md`. Phase A is
+additive and reversible; it does NOT deploy Centaur (that is Phase B/U6).
+
+### Degraded-HA decision (read first)
+
+The plan's U2 calls for ZFS replication `pve-01`→`pve-02` so the VM disk is
+present on the surviving node for a Proxmox HA restart. **Neither node has a ZFS
+pool, a second disk, or shared storage** — both are a single 256 GB NVMe fully
+consumed by the stock Proxmox LVM layout (`pvesm status` → only `local` + thin
+`local-lvm`; `zpool list` → no pools). Provisioning therefore runs on
+`local-lvm` (node-local) with **cross-node failover deferred** to a later
+disk-hardening follow-up. The VM auto-restarts only on a **`pve-01` reboot**
+(`onboot: 1`); a `pve-01` node loss does NOT relocate it to `pve-02`. An HA
+resource is intentionally NOT added — with a node-local disk it would try to
+relocate and wedge in an error state. R3's node-loss arm is explicitly unmet
+until replicated/shared storage exists.
+
+### Live inventory (verified 2026-06-29)
+
+- Proxmox 9.2.2 on both nodes; cluster `homelab`; `pvecm status` quorate, Pi
+  QDevice voting (total 3 / quorum 2 → survives one-node loss for *quorum*).
+- `pve-01` tailnet `100.104.80.71` (LAN `10.200.160.152/25`, gw
+  `10.200.160.129`, bridge `vmbr0`); `pve-02` tailnet `100.64.219.49`.
+- Storage on each node: `local` (dir) + `local-lvm` (lvmthin, ~145 GB free). No
+  ZFS, no Ceph/NFS.
+
+### Provisioned resource (state left behind)
+
+| Item | Value |
+|------|-------|
+| VM ID | `110` (avoided `100` — orphaned `pve-vm-100-disk-0` on pve-01) |
+| Name / host | `centaur-k3s` |
+| Node | `pve-01` |
+| Spec | 8192 MiB RAM, 2 vCPU (1 socket), `cpu host` |
+| Disk | `local-lvm:vm-110-disk-0`, 40 GiB, `discard=on` (node-local) |
+| LAN IP | `10.200.160.160/25`, gw `10.200.160.129` (static via cloud-init) |
+| Tailnet IP | `100.90.78.40` (hostname `centaur-k3s`) |
+| OS | Debian 12 (bookworm), cloud-init |
+| k3s | `v1.36.2+k3s1`, single control-plane node, traefik disabled |
+| Docker | `29.6.1` (for Phase B image build → `k3s ctr images import`) |
+| Auto-start | `onboot: 1` (host-reboot only; no HA resource) |
+
+### U1 — Provision the VM (run on `pve-01` as root)
+
+```bash
+# Debian 12 genericcloud image (lazy clone+cloud-init path)
+curl -4 -fSL -o /root/images/debian-12-genericcloud-amd64.qcow2 \
+  https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2
+
+# Stage the SSH pubkey to inject (one ed25519 line)
+printf '%s\n' 'ssh-ed25519 AAAA... master@masters-Mac-Studio.local' > /root/centaur-k3s-zay.pub
+
+qm create 110 --name centaur-k3s \
+  --memory 8192 --cores 2 --sockets 1 --cpu host \
+  --net0 virtio,bridge=vmbr0 --scsihw virtio-scsi-single \
+  --ostype l26 --agent enabled=1
+qm set 110 --scsi0 local-lvm:0,import-from=/root/images/debian-12-genericcloud-amd64.qcow2,discard=on
+qm set 110 --ide2 local-lvm:cloudinit
+qm set 110 --boot order=scsi0
+qm set 110 --serial0 socket --vga serial0
+qm disk resize 110 scsi0 40G
+qm set 110 --ciuser zay --sshkeys /root/centaur-k3s-zay.pub \
+  --ipconfig0 ip=10.200.160.160/25,gw=10.200.160.129 \
+  --nameserver "1.1.1.1 8.8.8.8" --ciupgrade 0
+qm set 110 --onboot 1            # U2 interim: auto-start on pve-01 boot
+qm start 110
+```
+
+In-guest provisioning (SSH `zay@10.200.160.160`, ProxyJump via `root@pve-01`
+until Tailscale is up; thereafter `zay@100.90.78.40` over the tailnet):
+
+```bash
+sudo apt-get update
+sudo apt-get install -y qemu-guest-agent ca-certificates curl gnupg
+sudo systemctl enable --now qemu-guest-agent systemd-timesyncd
+sudo timedatectl set-ntp true                 # clock-sensitive for OAuth/k8s certs
+curl -fsSL https://get.docker.com | sudo sh   # Docker 29.6.1 (image build, Phase B)
+sudo usermod -aG docker zay && sudo systemctl enable --now docker
+
+# Join the tailnet headlessly with a one-time pre-auth key. DNS left on the
+# VM's own resolvers (--accept-dns=false) so it does not depend on the Pi
+# (QDevice + AdGuard). The key is single-use and revoked after provisioning.
+curl -fsSL https://tailscale.com/install.sh | sudo sh
+sudo tailscale up --authkey="<TS_PREAUTH_KEY_REDACTED>" \
+  --hostname=centaur-k3s --accept-dns=false
+```
+
+**U1 verification (by live state):** `qm config 110` shows disk on
+`local-lvm`; `tailscale status` lists `centaur-k3s 100.90.78.40`; direct
+`ssh zay@100.90.78.40` works; a `sudo systemctl reboot` returns in ~30s with
+`docker`/`tailscaled`/`qemu-guest-agent` all `active` and root fs 40 GiB.
+
+### U2 — Auto-restart (interim; replication deferred)
+
+Set by `qm set 110 --onboot 1` above. **No ZFS replication and no HA resource**
+(see decision note). Verify: `qm config 110 | grep onboot` → `onboot: 1`;
+`qm agent 110 ping` responds; `ha-manager status` shows nothing managed;
+`zpool list` → no pools (substrate unchanged). Cross-node failover = deferred.
+
+### U3 — k3s + agent-sandbox (run in-guest)
+
+```bash
+curl -sfL https://get.k3s.io | sudo sh -s - --disable traefik --write-kubeconfig-mode 644
+mkdir -p ~/.kube && sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config && sudo chown zay:zay ~/.kube/config
+kubectl get nodes          # Ready, v1.36.2+k3s1, runtime containerd (NOT Docker)
+
+# agent-sandbox v0.4.6 controller — install the chart dep in isolation (no Centaur).
+# The vendored subchart is contrib/chart/charts/agent-sandbox-0.1.0.tgz; tag from
+# contrib/chart/values.yaml (agentSandbox.image.tag: v0.4.6).
+# NOTE: the subchart templates its own namespace — do NOT pass --create-namespace
+# (it conflicts). Pre-create the ns and set namespace.create=false.
+kubectl create namespace agent-sandbox-system
+helm install agent-sandbox /tmp/agent-sandbox-0.1.0.tgz -n agent-sandbox-system \
+  --set image.tag=v0.4.6 --set namespace.create=false --wait
+```
+
+**U3 verification (by live state):**
+- `kubectl get nodes` → `centaur-k3s Ready control-plane … containerd://2.3.2-k3s2`.
+- local-path is the default StorageClass; a throwaway `local-path` PVC + pause
+  pod binds (`PVC Bound`), then cleaned up.
+- All four CRDs `Established=True`: `sandboxes.agents.x-k8s.io`,
+  `sandboxclaims`/`sandboxtemplates`/`sandboxwarmpools.extensions.agents.x-k8s.io`.
+- `agent-sandbox-controller` deploy `1/1 Ready`, image
+  `registry.k8s.io/agent-sandbox/agent-sandbox-controller:v0.4.6` present in
+  `k3s ctr images ls`; logs show it became leader and started the Sandbox worker.
+- **Phase B note:** k3s containerd is separate from the Docker daemon — images
+  built with `docker build` (U6) must be `docker save` → `sudo k3s ctr images
+  import`'d; set `pullPolicy: IfNotPresent` for all five images.
+- **Residual (minor):** the vendored agent-sandbox subchart's generated RBAC
+  lacks `events:create`, so the controller logs an event-rejected warning. It is
+  cosmetic (leader election + reconcile work); fix RBAC in the chart for Phase B.
+
+### Rollback / teardown (fully reversible)
+
+```bash
+# In-guest: helm uninstall agent-sandbox -n agent-sandbox-system; /usr/local/bin/k3s-uninstall.sh
+# On pve-01:
+qm stop 110 && qm destroy 110 --purge      # removes vm-110-disk-0 + cloudinit
+# Then revoke the Tailscale node + the one-time pre-auth key in the admin console.
+```
+
+### Deferred (NOT done in Phase A)
+
+- Replicated/shared storage + Proxmox HA resource (R3 node-loss arm) — needs a
+  storage decision (add disks / Ceph / NFS) from the owner.
+- Phase B (secrets, 1Password Connect, token-broker, image build+import, Helm
+  deploy) and Phase C (tunnel cutover, HA drill, Mac-off) — not started.
