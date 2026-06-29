@@ -57,3 +57,13 @@ rules:
   verbs:
   - create
   - patch
+# The controller records leader-election + reconcile Events via the legacy core
+# ("") Events API, not events.k8s.io. Grant the core group too, or it logs
+# "events is forbidden ... in API group \"\"" on every leader election.
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch

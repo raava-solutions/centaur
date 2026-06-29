@@ -1,0 +1,138 @@
+# Raava production values for Centaur on the Proxmox k3s VM (centaur-k3s / VM 110).
+#
+# Layer AFTER values.raava-local.yaml:
+#   helm upgrade --install centaur contrib/chart -n centaur \
+#     -f overlays/raava-internal/deploy/values.raava-local.yaml \
+#     -f overlays/raava-internal/deploy/values.raava-proxmox.yaml
+#
+# What this overlay changes vs the local-Kind profile:
+#   - All FIVE images pull IfNotPresent (chart default is Always → ImagePullBackOff
+#     for images side-loaded into k3s containerd via `k3s ctr images import`).
+#   - Secret resolution moves to 1Password Connect (writable token on Engineering)
+#     and the iron-token-broker is enabled for the Codex OAuth refresh-token loop.
+#   - Postgres PVC is pinned to the k3s local-path StorageClass (20Gi).
+#   - Resource requests/limits are sized for the 8 GiB / 2 vCPU VM so the sandbox
+#     warm-pool / on-demand sandboxes cannot evict the core control plane.
+#
+# NOT in this file (handled separately — see runbook "Proxmox Migration — Phase B"):
+#   - All secret VALUES (centaur-infra-env, Connect credentials, codex blob): created
+#     out-of-band by `just bootstrap-secrets` + 1Password. Never commit secrets here.
+#   - cloudflared: applied as the standalone manifest cloudflared-centaur.yaml (it is
+#     NOT a chart value) and needs the centaur-cloudflared-credentials secret. Deferred
+#     to the tunnel cutover (U7).
+#   - The agent-sandbox controller is installed standalone (Phase A, ns
+#     agent-sandbox-system, cluster-scoped) so agentSandbox.enabled stays false here
+#     to avoid a double-install / CRD-ownership conflict.
+
+# --- Secret backend: 1Password Connect (writable token on Engineering) -----------
+ironProxy:
+  secretSource: onepassword-connect
+  secretTtl: 10m
+  image:
+    pullPolicy: IfNotPresent
+  manager:
+    secretSource: onepassword-connect
+  resources:
+    requests:
+      cpu: 50m
+      memory: 96Mi
+    limits:
+      memory: 256Mi
+
+# iron-token-broker: single-writer OAuth refresh-token coordinator (Codex). Requires
+# a WRITABLE secret backend — the in-cluster Connect token MUST have write scope on
+# the Engineering vault, or rc.2 blocks access-token issuance.
+tokenBroker:
+  enabled: true
+  image:
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      memory: 128Mi
+
+# In-cluster 1Password Connect deployment (subchart). create=true stands up the
+# Connect API+sync pods; the credentials Secret + OP_CONNECT_TOKEN come from
+# bootstrap-k8s-secrets.sh (OP_CONNECT_CREDENTIALS_FILE / OP_CONNECT_TOKEN).
+onepasswordConnect:
+  connect:
+    create: true
+    credentialsName: centaur-onepassword-connect-credentials
+    credentialsKey: 1password-credentials.json
+    serviceType: ClusterIP
+
+secretManager:
+  existingSecretName: centaur-infra-env
+  envPrefix: ""
+
+# --- Control plane --------------------------------------------------------------
+api:
+  # Route API-hosted tools through the egress proxy so they get credential injection.
+  firewallProxy:
+    enabled: true
+  # Egress discovery needs a centaur-egress namespace + tailnet FQDN annotations
+  # that are not provisioned here; keep it off (matches values.dev.yaml) so the
+  # file is correct even if layered without values.dev.yaml.
+  egressDiscovery:
+    enabled: false
+  image:
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 1536Mi
+
+slackbot:
+  image:
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 384Mi
+
+sandbox:
+  image:
+    pullPolicy: IfNotPresent
+  # codexAuth (existingSecretName centaur-codex-auth, key auth.json) is inherited
+  # from values.raava-local.yaml — the secret is created out-of-band (see runbook).
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+
+# Raava overlay image — built locally as raava-centaur-overlay:local and imported
+# into k3s containerd. Re-declared here so the prod path is explicit.
+overlay:
+  image:
+    repository: raava-centaur-overlay
+    tag: local
+    pullPolicy: IfNotPresent
+    sourcePath: /overlay
+
+# --- State ----------------------------------------------------------------------
+postgres:
+  image:
+    pullPolicy: IfNotPresent
+  persistence:
+    enabled: true
+    size: 20Gi
+    storageClassName: local-path
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+
+# agent-sandbox controller is installed standalone (Phase A). Keep the chart's copy
+# disabled to avoid a duplicate controller / CRD-ownership conflict.
+agentSandbox:
+  enabled: false
