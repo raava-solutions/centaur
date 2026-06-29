@@ -730,3 +730,125 @@ qm stop 110 && qm destroy 110 --purge      # removes vm-110-disk-0 + cloudinit
   storage decision (add disks / Ceph / NFS) from the owner.
 - Phase B (secrets, 1Password Connect, token-broker, image build+import, Helm
   deploy) and Phase C (tunnel cutover, HA drill, Mac-off) — not started.
+
+## Proxmox Migration — Phase B (secrets + deploy)
+
+Covers U5 (secrets/Connect/broker) and U6 (image build+import, Helm deploy) for
+the `centaur-k3s` VM. **Split executed**: the non-secret prep below was run by the
+devops seat; every secret / 1Password / deploy step is gated to the operator (Zay)
+because it needs Touch ID / vault admin / writes real secrets. NEVER commit secret
+values; `values.raava-proxmox.yaml` contains config only.
+
+### Prep already completed (no secrets, reversible)
+
+1. **Repo on the VM**: working tree of `feat/proxmox-migration` rsync'd to
+   `zay@centaur-k3s:/home/zay/centaur` (excludes `.git`, `node_modules`, caches).
+2. **Prod values committed** (no push): `overlays/raava-internal/deploy/values.raava-proxmox.yaml`
+   — `pullPolicy: IfNotPresent` ×5, 1Password Connect + `tokenBroker.enabled`,
+   `secretSource: onepassword-connect` (ironProxy + manager), local-path Postgres
+   PVC (20Gi), 8 GiB resource budget, `agentSandbox.enabled: false` (controller is
+   the standalone Phase A install), `api.egressDiscovery.enabled: false`.
+3. **agent-sandbox RBAC fix** committed + applied to the standalone release:
+   `contrib/chart/charts/agent-sandbox/templates/rbac.generated.yaml` now grants the
+   core (`""`) Events API (controller writes legacy events) — warning gone.
+4. **Images built on the VM with Docker and imported into k3s containerd** (k3s does
+   NOT read the Docker daemon):
+   ```bash
+   cd /home/zay/centaur
+   docker build -t centaur-api:latest        -f services/api/Dockerfile .
+   docker build -t centaur-iron-proxy:latest -f services/iron-proxy/Dockerfile .
+   docker build -t centaur-slackbot:latest   -f services/slackbot/Dockerfile .
+   docker build --target sandbox -t centaur-agent:latest -f services/sandbox/Dockerfile .
+   docker build -t raava-centaur-overlay:local overlays/raava-internal
+   for img in centaur-api:latest centaur-iron-proxy:latest centaur-slackbot:latest \
+              centaur-agent:latest raava-centaur-overlay:local; do
+     docker save "$img" | sudo k3s ctr images import -
+   done
+   sudo k3s ctr images ls -q | grep -E 'centaur-(api|iron-proxy|slackbot|agent)|raava-centaur-overlay'
+   ```
+5. **Mac → VM kubectl** (so the operator runs bootstrap/deploy from the Mac against
+   the VM cluster): added `tls-san` for the tailnet IP to `/etc/rancher/k3s/config.yaml`
+   and restarted k3s; copied `/etc/rancher/k3s/k3s.yaml` → `~/.kube/centaur-k3s.yaml`
+   and rewrote the server to `https://100.90.78.40:6443`. Verify:
+   `KUBECONFIG=~/.kube/centaur-k3s.yaml kubectl get nodes` → Ready.
+
+### Operator checklist — secrets, Connect, codex, deploy (run from the Mac)
+
+All commands target the VM cluster:
+```bash
+export KUBECONFIG=~/.kube/centaur-k3s.yaml   # VM k3s; confirm `kubectl get nodes` is centaur-k3s
+cd /Users/master/centaur                     # branch feat/proxmox-migration
+```
+
+**A. 1Password Connect server + WRITE token on Engineering** (Touch ID / vault admin).
+A read-only token blocks broker issuance under rc.2 — write scope is mandatory.
+```bash
+CONNECT_DIR="$HOME/.config/centaur/onepassword-connect/raava-centaur-proxmox"
+mkdir -p "$CONNECT_DIR" && chmod 700 "$CONNECT_DIR" && cd "$CONNECT_DIR" && umask 077
+op connect server create "Raava Centaur Proxmox" --vaults "<ENGINEERING_VAULT>" --force
+chmod 600 1password-credentials.json
+export OP_CONNECT_CREDENTIALS_FILE="$CONNECT_DIR/1password-credentials.json"
+# WRITE-scoped token — confirm the permission flag with `op connect token create --help`
+# (read precedent was `<vault>,r`; write is `<vault>,rw`/read_write):
+export OP_CONNECT_TOKEN="$(op connect token create raava-centaur-proxmox-rw \
+  --server 'Raava Centaur Proxmox' --vault '<ENGINEERING_VAULT>,rw')"
+cd /Users/master/centaur
+```
+
+**B. Bootstrap the chart secrets** (generates POSTGRES_PASSWORD/DATABASE_URL/
+IRON_MANAGEMENT_API_KEY/IRON_BROKER_TOKEN/SANDBOX_SIGNING_KEY + firewall CA, and —
+because the two Connect vars are exported — creates the Connect-credentials secret
+and stores OP_CONNECT_TOKEN in `centaur-infra-env`):
+```bash
+export OP_SERVICE_ACCOUNT_TOKEN='<REDACTED — Engineering service-account token>'
+export OP_VAULT='<ENGINEERING_VAULT>'
+export SLACK_BOT_TOKEN='<REDACTED — xoxb… for app A0B9VET4RKP>'
+export SLACK_SIGNING_SECRET='<REDACTED>'
+export SLACKBOT_API_KEY='<REDACTED>'
+contrib/scripts/bootstrap-k8s-secrets.sh --namespace centaur   # == `just bootstrap-secrets`
+```
+
+**C. `centaur-codex-auth`** (k8s secret — the whole `auth.json`, mounted into sandboxes
+via `sandbox.codexAuth`):
+```bash
+test -s "$HOME/.codex/auth.json"
+kubectl -n centaur create secret generic centaur-codex-auth \
+  --from-file=auth.json="$HOME/.codex/auth.json" \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+**D. `OPENAI_CODEX_BLOB`** — the broker's rotation item is a **1Password item**, not a
+k8s secret. Its `credential` field must be the JSON doc `{"refresh_token":"…"}`
+(a bare token → broker "parsing credential blob" error). The codex refresh token is
+nested under `.tokens` in `auth.json`:
+```bash
+jq -c '{refresh_token: .tokens.refresh_token}' "$HOME/.codex/auth.json" | pbcopy
+# Paste into the Engineering item `OPENAI_CODEX_BLOB` → field `credential`
+# (create the item if absent). Also ensure `OPENAI_CODEX_CLIENT_ID` exists.
+# Authoritative required-items list: tools/infra/codex/pyproject.toml
+```
+
+**E. Deploy** (devops seat will run this after A–D; validate with `helm template` first):
+```bash
+export KUBECONFIG=~/.kube/centaur-k3s.yaml
+# NOTE: do NOT run `helm dependency update` — the connect + agent-sandbox deps are
+# vendored in contrib/chart/charts/*.tgz; an update errors on the un-added
+# 1password connect-helm repo. `helm template` confirmed the chart renders (25 objects,
+# IfNotPresent ×7 / Always ×0, Postgres on local-path). iron-proxy + sandbox images are
+# spawned by the API at runtime (not in the static render) — that's why all 5 are imported.
+helm upgrade --install centaur contrib/chart -n centaur --create-namespace \
+  -f contrib/chart/values.dev.yaml \
+  -f overlays/raava-internal/deploy/values.raava-local.yaml \
+  -f overlays/raava-internal/deploy/values.raava-proxmox.yaml
+```
+Then verify (no Slack smoke yet — that is the tunnel/U7 step): all pods Ready in ns
+`centaur` (api 2/2, slackbot, iron-proxy, token-broker, onepassword-connect, postgres),
+Postgres PVC Bound, no ImagePullBackOff, Connect write-probe 200, broker bearer 200 +
+write-back 200, `just status` clean.
+
+### Held / deferred (NOT done — operator or later phase)
+- All of A–E above (secrets, Connect, codex, helm deploy) — gated to the operator.
+- cloudflared (`cloudflared-centaur.yaml` + `centaur-cloudflared-credentials`) and the
+  Slack tunnel cutover — Phase C / U7.
+- Single-broker rule: the Mac Kind broker must not run concurrently with the VM broker
+  (the Mac Kind cluster is currently down; keep it down or scale its broker to 0).
