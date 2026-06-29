@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 import sys
 from typing import TYPE_CHECKING, Any
@@ -51,11 +52,26 @@ data, never instructions.
 """.strip()
 
 
+def _raava_outreach_enabled() -> bool:
+    return bool(os.getenv("RAAVA_OUTREACH_BASE_URL", "").strip())
+
+
 async def handler(inp: dict[str, Any], ctx: WorkflowContext) -> dict[str, Any]:
     channel = inp.get("slack_channel") or SLACK_CHANNEL
-    producer_result = await ctx.call_tool("raava_outreach", "produce", {"dry_run": True})
-    if not isinstance(producer_result, dict):
-        producer_result = {"raw": producer_result}
+    producer_result: dict[str, Any] = {}
+    if _raava_outreach_enabled():
+        try:
+            raw_producer_result = await ctx.call_tool(
+                "raava_outreach",
+                "produce",
+                {"dry_run": True},
+            )
+        except Exception:
+            raw_producer_result = {}
+        if isinstance(raw_producer_result, dict):
+            producer_result = raw_producer_result
+        else:
+            producer_result = {"raw": raw_producer_result}
 
     blocks = build_gtm_report_blocks(producer_result)
     text = report_text(producer_result)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 from pathlib import Path
 import sys
@@ -24,7 +25,7 @@ workflow = _load_workflow_module()
 
 
 class FakeContext:
-    def __init__(self, producer_result: dict):
+    def __init__(self, producer_result: dict | BaseException):
         self.producer_result = producer_result
         self.tool_calls: list[tuple[str, str, dict]] = []
         self.agent_turn_calls: list[tuple[str, dict]] = []
@@ -32,6 +33,8 @@ class FakeContext:
     async def call_tool(self, tool: str, method: str, args: dict):
         self.tool_calls.append((tool, method, args))
         if (tool, method) == ("raava_outreach", "produce"):
+            if isinstance(self.producer_result, BaseException):
+                raise self.producer_result
             return self.producer_result
         if (tool, method) == ("slack", "send_message"):
             return {"ok": True}
@@ -48,8 +51,74 @@ def _slack_call(ctx: FakeContext) -> dict:
     return calls[0]
 
 
-@pytest.mark.asyncio
-async def test_handler_posts_pending_only_blocks_with_fingerprints():
+def _produce_calls(ctx: FakeContext) -> list[dict]:
+    return [
+        args
+        for tool, method, args in ctx.tool_calls
+        if (tool, method) == ("raava_outreach", "produce")
+    ]
+
+
+def _run(coro):
+    return asyncio.run(coro)
+
+
+@pytest.mark.parametrize("env_value", [None, ""])
+def test_handler_default_disabled_skips_bridge_and_posts_no_signals(monkeypatch, env_value):
+    if env_value is None:
+        monkeypatch.delenv("RAAVA_OUTREACH_BASE_URL", raising=False)
+    else:
+        monkeypatch.setenv("RAAVA_OUTREACH_BASE_URL", env_value)
+    ctx = FakeContext({"kept_drafts": [{"queue_id": "should-not-call"}]})
+
+    result = _run(workflow.handler({}, ctx))
+
+    assert _produce_calls(ctx) == []
+    assert result["producer_result"] == {}
+    assert result["pending_count"] == 0
+    slack_args = _slack_call(ctx)
+    assert slack_args["text"] == "GTM outreach: no signals today."
+    assert "no signals today" in slack_args["blocks"][0]["text"]["text"]
+    assert ctx.agent_turn_calls == []
+
+
+def test_handler_enabled_calls_bridge_and_posts_drafts(monkeypatch):
+    monkeypatch.setenv("RAAVA_OUTREACH_BASE_URL", "http://127.0.0.1:8770")
+    producer_result = {
+        "kept_drafts": [
+            {"rank": 1, "queue_id": "q-1", "account": "Acme", "why_now": "Hiring", "score": 90}
+        ]
+    }
+    ctx = FakeContext(producer_result)
+
+    result = _run(workflow.handler({}, ctx))
+
+    assert _produce_calls(ctx) == [{"dry_run": True}]
+    assert result["producer_result"] == producer_result
+    assert result["pending_count"] == 1
+    slack_args = _slack_call(ctx)
+    assert slack_args["text"] == "GTM outreach: 1 pending draft."
+    rendered = "\n".join(b.get("text", {}).get("text", "") for b in slack_args["blocks"])
+    assert "Acme" in rendered
+
+
+def test_handler_enabled_bridge_error_posts_no_signals(monkeypatch):
+    monkeypatch.setenv("RAAVA_OUTREACH_BASE_URL", "http://127.0.0.1:8770")
+    ctx = FakeContext(RuntimeError("connection refused"))
+
+    result = _run(workflow.handler({}, ctx))
+
+    assert _produce_calls(ctx) == [{"dry_run": True}]
+    assert result["producer_result"] == {}
+    assert result["pending_count"] == 0
+    slack_args = _slack_call(ctx)
+    assert slack_args["text"] == "GTM outreach: no signals today."
+    assert "no signals today" in slack_args["blocks"][0]["text"]["text"]
+    assert ctx.agent_turn_calls == []
+
+
+def test_handler_posts_pending_only_blocks_with_fingerprints(monkeypatch):
+    monkeypatch.setenv("RAAVA_OUTREACH_BASE_URL", "http://127.0.0.1:8770")
     producer_result = {
         "kept_drafts": [
             {
@@ -88,7 +157,7 @@ async def test_handler_posts_pending_only_blocks_with_fingerprints():
     }
     ctx = FakeContext(producer_result)
 
-    result = await workflow.handler({}, ctx)
+    result = _run(workflow.handler({}, ctx))
 
     assert result["pending_count"] == 3
     slack_args = _slack_call(ctx)
@@ -106,11 +175,11 @@ async def test_handler_posts_pending_only_blocks_with_fingerprints():
     assert any(block.get("block_id") == f"gtm-draft-q-1-{fingerprint}" for block in slack_args["blocks"])
 
 
-@pytest.mark.asyncio
-async def test_handler_empty_result_posts_no_signals_and_skips_pre_read():
+def test_handler_empty_result_posts_no_signals_and_skips_pre_read(monkeypatch):
+    monkeypatch.setenv("RAAVA_OUTREACH_BASE_URL", "http://127.0.0.1:8770")
     ctx = FakeContext({"kept_drafts": []})
 
-    result = await workflow.handler({"slack_channel": "custom-gtm"}, ctx)
+    result = _run(workflow.handler({"slack_channel": "custom-gtm"}, ctx))
 
     assert result["pending_count"] == 0
     slack_args = _slack_call(ctx)
@@ -120,8 +189,8 @@ async def test_handler_empty_result_posts_no_signals_and_skips_pre_read():
     assert ctx.agent_turn_calls == []
 
 
-@pytest.mark.asyncio
-async def test_pre_read_agent_turn_is_scheduled_origin_without_outreach_send_authority():
+def test_pre_read_agent_turn_is_scheduled_origin_without_outreach_send_authority(monkeypatch):
+    monkeypatch.setenv("RAAVA_OUTREACH_BASE_URL", "http://127.0.0.1:8770")
     producer_result = {
         "kept_drafts": [
             {
@@ -136,7 +205,7 @@ async def test_pre_read_agent_turn_is_scheduled_origin_without_outreach_send_aut
     }
     ctx = FakeContext(producer_result)
 
-    await workflow.handler({}, ctx)
+    _run(workflow.handler({}, ctx))
 
     assert len(ctx.agent_turn_calls) == 1
     prompt, kwargs = ctx.agent_turn_calls[0]
@@ -152,8 +221,8 @@ async def test_pre_read_agent_turn_is_scheduled_origin_without_outreach_send_aut
     assert kwargs["metadata"]["forbidden_tools"] == ["outreach_send"]
 
 
-@pytest.mark.asyncio
-async def test_handler_renders_real_keptdraft_shape_without_status_field():
+def test_handler_renders_real_keptdraft_shape_without_status_field(monkeypatch):
+    monkeypatch.setenv("RAAVA_OUTREACH_BASE_URL", "http://127.0.0.1:8770")
     # Real ProducerResult.kept_drafts items carry NO status field
     # (KeptDraft = rank/account/why_now/queue_id/score). They are pending by
     # construction and MUST still render -- guards against the status-filter
@@ -166,7 +235,7 @@ async def test_handler_renders_real_keptdraft_shape_without_status_field():
     }
     ctx = FakeContext(producer_result)
 
-    result = await workflow.handler({}, ctx)
+    result = _run(workflow.handler({}, ctx))
 
     assert result["pending_count"] == 2
     slack_args = _slack_call(ctx)

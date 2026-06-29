@@ -14,7 +14,7 @@ import httpx
 
 from centaur_sdk import secret
 
-_DEFAULT_BASE_URL = "http://host.docker.internal:8770"
+_DEFAULT_BASE_URL: str | None = None
 
 
 class RaavaOutreachClient:
@@ -28,15 +28,27 @@ class RaavaOutreachClient:
 
     def __init__(self) -> None:
         self._client: httpx.Client | None = None
+        configured_base_url = os.getenv("RAAVA_OUTREACH_BASE_URL", "").strip()
+        self.base_url: str | None = configured_base_url.rstrip("/") or _DEFAULT_BASE_URL
+
+    @property
+    def enabled(self) -> bool:
+        return self.base_url is not None
+
+    @property
+    def is_enabled(self) -> bool:
+        return self.enabled
 
     def _http(self) -> httpx.Client:
         """Return the cached HTTP client, building it after secrets are injected."""
         if self._client is not None:
             return self._client
+        if self.base_url is None:
+            raise RuntimeError("raava-outreach bridge is disabled: RAAVA_OUTREACH_BASE_URL is unset")
 
         token = secret("RAAVA_OUTREACH_HTTP_TOKEN", "")
         self._client = httpx.Client(
-            base_url=os.getenv("RAAVA_OUTREACH_BASE_URL", _DEFAULT_BASE_URL).rstrip("/"),
+            base_url=self.base_url,
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
