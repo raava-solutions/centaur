@@ -142,5 +142,5 @@ def test_sandbox_entrypoint_installs_codex_harness_config(tmp_path: Path) -> Non
 def test_committed_codex_harness_config_uses_default_service_tier() -> None:
     config = tomllib.loads(CODEX_HARNESS_CONFIG.read_text())
 
-    assert config["model_reasoning_effort"] == "medium"
+    assert config["model_reasoning_effort"] == "high"
     assert "service_tier" not in config

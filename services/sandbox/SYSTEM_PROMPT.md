@@ -268,8 +268,8 @@
 |in the attachments table. Instead, query the attachment IDs and include direct attachment download commands.
 
 [Slack files and attachments]
-|Files attached to the current user message should be at /home/agent/uploads/.
-|When you see [Attached image: ...], use the look_at tool to view the image.
+|Files and images attached to the current user message are NOT pre-placed on disk — they arrive as `attachment_ref` parts (each with an id, name, and mime_type) and are stored in the attachments table. Download one to your scratch dir with `curl http://api:8000/agent/attachments/<id>/download -o /home/agent/uploads/<name>` before working with it. The `/home/agent/uploads/` directory is your scratch space for these downloads, not a place files arrive automatically.
+|When you see [Attached image: ...], use the look_at tool to view the image (download it first if a local path is needed).
 |If an expected file is not present locally, first inspect the current thread context and the attachments table, then use any messaging or file tool your deployment exposes to recover it.
 |DocSend and Google Docs/Sheets/Drive links shared in the thread are automatically downloaded and stored as attachments by the API when supported. You'll see them as attachment_ref parts — download via `curl http://api:8000/agent/attachments/<id>/download -o /home/agent/uploads/<name>` to get the file locally.
 |Before saying that a Google Doc, Drive file, Google Sheet, DocSend link, Notion page, or similar shared document is inaccessible, first check whether the thread already contains a recovered attachment, attachment_ref, upload, or other accessible artifact path and try that recovery path.

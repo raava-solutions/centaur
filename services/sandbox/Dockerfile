@@ -102,6 +102,7 @@ ENV PATH="/home/agent/.cargo/bin:/home/agent/.local/bin:/home/agent/.foundry/bin
 
 ARG FOUNDRY_VERSION=v1.7.0
 ARG AMP_CLI_VERSION=0.0.1774529752-g94f44d
+ARG MERCURY_VERSION=0.10.2
 ARG MANIM_VERSION=0.20.1
 ARG BUN_VERSION=bun-v1.3.13
 
@@ -137,6 +138,26 @@ RUN set -eux; \
     ln -sf "$HOME/.amp/bin/amp" "$HOME/.local/bin/amp"; \
     rm -f /tmp/amp.sha256; \
     amp --version >/dev/null
+RUN set -eux; \
+    mercury_arch="$(case "$(dpkg --print-architecture)" in \
+      amd64) echo amd64 ;; \
+      arm64) echo arm64 ;; \
+      *) echo unsupported-architecture >&2; exit 1 ;; \
+    esac)"; \
+    mercury_tarball="mercury_${MERCURY_VERSION}_linux_${mercury_arch}.tar.gz"; \
+    mercury_url="https://github.com/MercuryTechnologies/mercury-cli/releases/download/v${MERCURY_VERSION}/${mercury_tarball}"; \
+    checksums_url="https://github.com/MercuryTechnologies/mercury-cli/releases/download/v${MERCURY_VERSION}/mercury_${MERCURY_VERSION}_checksums.txt"; \
+    curl -fsSL "${mercury_url}" -o "/tmp/${mercury_tarball}"; \
+    curl -fsSL "${checksums_url}" -o /tmp/mercury_checksums.txt; \
+    grep -F "${mercury_tarball}" /tmp/mercury_checksums.txt > /tmp/mercury.sha256; \
+    (cd /tmp && sha256sum -c /tmp/mercury.sha256); \
+    mkdir -p /tmp/mercury; \
+    tar -xzf "/tmp/${mercury_tarball}" -C /tmp/mercury; \
+    mercury_bin="$(find /tmp/mercury -type f -name mercury -perm /111 | head -n 1)"; \
+    test -n "${mercury_bin}"; \
+    sudo install -m 0755 "${mercury_bin}" /usr/local/bin/mercury; \
+    rm -rf /tmp/mercury "/tmp/${mercury_tarball}" /tmp/mercury_checksums.txt /tmp/mercury.sha256; \
+    mercury --version | grep -F "${MERCURY_VERSION}"
 
 # ── agent-browser: download Chrome binary (runs as agent, deps already installed) ─
 RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then \

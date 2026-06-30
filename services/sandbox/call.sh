@@ -186,7 +186,7 @@ case "$tool" in
   tools)
     # Inject the built-in agent sub-command into the tool listing
     response="$(request "GET" "$U/tools")" || { printf '%s\n' "$response"; exit 1; }
-    printf '%s' "$response" | jq -c '. + {"agent":{"description":"Sub-agent dispatch (built-in). Use: call agent execute, call agent status, call agent runtime, call agent stop","methods":["execute","status","runtime","stop"]}}'
+    printf '%s' "$response" | jq -c '. + {"agent":{"description":"Sub-agent dispatch (built-in). Use: call agent execute, call agent status, call agent runtime, call agent stop","methods":["execute","status","runtime","stop"]},"workflow":{"description":"Durable workflows (built-in). Use: call workflow run|get|cancel|list","methods":["run","get","cancel","list"]}}'
     printf '\n'
     ;;
   discover)
