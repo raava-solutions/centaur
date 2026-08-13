@@ -88,6 +88,9 @@ class TestIsTurnDone:
     def test_codex_other_event(self):
         assert is_turn_done("codex", {"type": "item.completed"}) is False
 
+    def test_hermes_result(self):
+        assert is_turn_done("hermes", {"type": "result", "result": "done"}) is True
+
     # pi-mono -------------------------------------------------------------
 
     def test_pi_mono_agent_end(self):
@@ -111,6 +114,9 @@ class TestExtractResult:
 
     def test_amp_result_event(self):
         assert extract_result("amp", {"type": "result", "result": "hello"}) == "hello"
+
+    def test_hermes_result_event(self):
+        assert extract_result("hermes", {"type": "result", "result": "hello"}) == "hello"
 
     def test_claude_code_result_event_with_text_field(self):
         event = {"type": "result", "text": "final synthesis"}
@@ -198,6 +204,10 @@ class TestExtractThreadId:
     def test_amp_system_init_empty_session_id(self):
         event = {"type": "system", "subtype": "init", "session_id": ""}
         assert extract_thread_id("amp", event) is None
+
+    def test_hermes_system_init(self):
+        event = {"type": "system", "subtype": "init", "session_id": "acp-session-1"}
+        assert extract_thread_id("hermes", event) == "acp-session-1"
 
     def test_amp_assistant_session_id(self):
         event = {

@@ -25,3 +25,11 @@ def test_default_harness_ignores_unknown_values(monkeypatch):
     monkeypatch.setenv("CENTAUR_DEFAULT_HARNESS", "unknown")
 
     assert default_harness() == "codex"
+
+
+def test_default_harness_supports_opt_in_hermes(monkeypatch):
+    from api.harness_config import default_harness
+
+    monkeypatch.setenv("CENTAUR_DEFAULT_HARNESS", "hermes")
+
+    assert default_harness() == "hermes"

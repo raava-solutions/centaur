@@ -50,6 +50,26 @@ ARG CLAUDE_CODE_VERSION=2.1.143
 ARG CODEX_VERSION=0.130.0
 ARG PI_CODING_AGENT_VERSION=0.67.2
 ARG NUSHELL_VERSION=0.112.2
+ARG HERMES_REPO=https://github.com/zaycruz/hermes-agent
+ARG HERMES_COMMIT=cf1c9975c4dfeef1a9ffddaab12d83440d09c79c
+ARG HERMES_ARCHIVE_SHA256=eaa8a076f8b506365a43fd29dec40a8b7b8278576e330a13a771fc397061b85c
+ARG HERMES_ACP_VERSION=0.9.0
+
+# Hermes is opt-in at the Centaur engine layer. Keep it isolated from the
+# API environment and pin both the source commit and its ACP dependency.
+RUN set -eux; \
+    mkdir -p /tmp/hermes-agent; \
+    curl -fsSL "${HERMES_REPO}/archive/${HERMES_COMMIT}.tar.gz" \
+      -o /tmp/hermes-agent.tar.gz; \
+    echo "${HERMES_ARCHIVE_SHA256}  /tmp/hermes-agent.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/hermes-agent.tar.gz --strip-components=1 -C /tmp/hermes-agent; \
+    python3 -m venv /opt/hermes-venv; \
+    /opt/hermes-venv/bin/pip install --no-cache-dir \
+      "/tmp/hermes-agent[acp]" "agent-client-protocol==${HERMES_ACP_VERSION}"; \
+    printf '%s\n' "${HERMES_COMMIT}" > /opt/hermes-source-commit; \
+    rm -rf /tmp/hermes-agent /tmp/hermes-agent.tar.gz; \
+    chown -R agent:agent /opt/hermes-venv /opt/hermes-source-commit; \
+    /opt/hermes-venv/bin/hermes-acp --check
 
 # ── Nushell ─────────────────────────────────────────────────────────────────
 RUN set -eux; \
@@ -192,6 +212,7 @@ COPY --link --chmod=755 services/sandbox/centaur-tool-bridge.py /usr/local/bin/c
 COPY --link --chmod=755 services/sandbox/amp-wrapper.py /usr/local/bin/amp-wrapper
 COPY --link --chmod=755 services/sandbox/codex-app-wrapper.py /usr/local/bin/codex-app-wrapper
 COPY --link --chmod=755 services/sandbox/claude-app-wrapper.py /usr/local/bin/claude-app-wrapper
+COPY --link --chmod=755 services/sandbox/hermes-acp-wrapper.py /usr/local/bin/hermes-acp-wrapper
 COPY --link --chmod=755 services/sandbox/harness_adapter.py /usr/local/bin/harness-adapter
 COPY --link --chmod=755 services/sandbox/git-branch.sh /usr/local/bin/git-branch
 COPY --link --chmod=755 services/sandbox/entrypoint.sh /entrypoint.sh

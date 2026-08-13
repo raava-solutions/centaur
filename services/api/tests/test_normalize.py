@@ -207,6 +207,20 @@ class TestPiMono:
         assert result[0]["content"][0]["tool_use_id"] == "tc1"
 
 
+class TestHermes:
+    def test_assistant_text(self):
+        event = {
+            "type": "assistant",
+            "session_id": "acp-session-1",
+            "message": {"content": [{"type": "text", "text": "hello"}]},
+        }
+        assert normalize_harness_event("hermes", event) == [event]
+
+    def test_reasoning(self):
+        event = {"type": "reasoning", "session_id": "acp-session-1", "text": "thinking"}
+        assert normalize_harness_event("hermes", event) == [event]
+
+
 class TestAutoDetect:
     def test_detect_codex(self):
         result = normalize_harness_event(
