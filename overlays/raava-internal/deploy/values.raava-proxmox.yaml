@@ -69,6 +69,8 @@ secretManager:
 
 # --- Control plane --------------------------------------------------------------
 api:
+  # Raava Slack threads use Hermes so they do not depend on a mutable Codex login.
+  defaultHarness: hermes
   # Route API-hosted tools through the egress proxy so they get credential injection.
   firewallProxy:
     enabled: true
@@ -80,6 +82,9 @@ api:
   # local roster baseline (no regression vs the dead local URL).
   extraEnv:
     RAAVA_GBRAIN_BASE_URL: "https://raava-brain-gbrain-lmbn6fkciq-ue.a.run.app"
+    # Keep enough CPU available for user turns on the two-core k3s node.
+    WARM_POOL_SIZE: "2"
+    WARM_POOL_HARNESS: "hermes"
   # Egress discovery needs a centaur-egress namespace + tailnet FQDN annotations
   # that are not provisioned here; keep it off (matches values.dev.yaml) so the
   # file is correct even if layered without values.dev.yaml.
