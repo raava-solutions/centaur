@@ -89,6 +89,8 @@ api:
   # warm sandbox keeps the agent image referenced, easing kubelet image GC.
   warmPoolEnabled: true
   image:
+    repository: centaur-api
+    tag: hermes-acp-198d4bab-harness1
     pullPolicy: IfNotPresent
   resources:
     requests:
@@ -99,6 +101,8 @@ api:
 
 slackbot:
   image:
+    repository: centaur-slackbot
+    tag: hermes-stream-9255ac0d
     pullPolicy: IfNotPresent
   resources:
     requests:
@@ -109,7 +113,16 @@ slackbot:
 
 sandbox:
   image:
+    repository: centaur-agent
+    tag: hermes-stream-9255ac0d
     pullPolicy: IfNotPresent
+  # Hermes 0.20 requires a concrete model in config.yaml. Keep both the
+  # provider-specific env value and the config bootstrap in the durable Helm
+  # values so a chart upgrade cannot reset the model to an empty string.
+  extraEnv:
+    CENTAUR_HERMES_ACP_COMMAND: >-
+      /bin/sh -c 'mkdir -p /home/agent/.hermes; printf "%s\n" "model:" "  default: deepseek/deepseek-v4-flash-0731" "  provider: openrouter" > /home/agent/.hermes/config.yaml; exec /opt/hermes-venv/bin/hermes-acp'
+    OPENROUTER_MODEL: "deepseek/deepseek-v4-flash-0731"
   # codexAuth (existingSecretName centaur-codex-auth, key auth.json) is inherited
   # from values.raava-local.yaml — the secret is created out-of-band (see runbook).
   resources:
