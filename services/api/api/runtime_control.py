@@ -153,6 +153,8 @@ def _matches_raw_harness_auth_failure(*values: str | None) -> bool:
             return True
         if "unauthorized" in normalized and "access token" in normalized:
             return True
+        if "access token" in normalized and "could not be refreshed" in normalized:
+            return True
     return False
 
 
@@ -2646,6 +2648,7 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
 
     turn_done_event: dict[str, Any] | None = None
     latest_terminal_result_text = ""
+    latest_harness_error = ""
     slackbot_streamed_answer_chars = 0
     pending_event: asyncio.Task | None = None
     stream = _stream_stdout(
@@ -2729,6 +2732,10 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
                 harness_thread_id = str(payload.get("session_id") or "")
             canonical_events = normalize_harness_event(engine, payload)
             for canonical_event in canonical_events:
+                if canonical_event.get("type") == "error":
+                    canonical_error = canonical_event.get("error")
+                    if isinstance(canonical_error, str) and canonical_error.strip():
+                        latest_harness_error = canonical_error.strip()
                 if canonical_event.get("type") != "result":
                     continue
                 extracted = extract_result(engine, canonical_event)
@@ -3027,6 +3034,8 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
     error_text = turn_done_event.get("error")
     if not isinstance(error_text, str):
         error_text = ""
+    if not error_text and not result_text and latest_harness_error:
+        error_text = latest_harness_error
     is_error = bool(turn_done_event.get("is_error")) or bool(error_text)
     if is_error:
         terminal_reason = "harness_error"

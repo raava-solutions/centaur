@@ -2022,6 +2022,112 @@ async def test_worker_sanitizes_raw_harness_auth_failure_after_retry(db_pool):
 
 
 @pytest.mark.asyncio
+async def test_worker_promotes_prior_codex_auth_error_when_turn_done_is_empty(db_pool):
+    from api.runtime_control import _process_execution
+
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    execution_id = f"exe-{uuid.uuid4().hex[:12]}"
+    runtime_id = f"rt-auth-{uuid.uuid4().hex[:8]}"
+    auth_error = (
+        "Your access token could not be refreshed. Please log out and sign in again."
+    )
+    retry_metadata = {
+        "control_plane_retry": {
+            "reason": "harness_auth",
+            "attempt": 1,
+            "max_attempts": 1,
+            "fresh_runtime": True,
+            "last_error": auth_error,
+        }
+    }
+
+    await db_pool.execute(
+        "INSERT INTO agent_runtime_assignments ("
+        "thread_key, assignment_generation, runtime_id, harness, engine, "
+        "persona_id, prompt_ref, effective_agents_md_sha256, state"
+        ") VALUES ($1, 1, $2, 'codex', 'codex', NULL, 'harness:codex', 'sha', 'active')",
+        thread_key,
+        runtime_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, "
+        "delivery, metadata, hard_deadline_at"
+        ") VALUES ($1, $2, 1, 'exec-codex-auth-final', 'hash-codex-auth-final', "
+        "'running', '{}'::jsonb, $3::jsonb, NOW() + INTERVAL '10 minutes')",
+        execution_id,
+        thread_key,
+        json.dumps(retry_metadata),
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_final_delivery_outbox (execution_id, thread_key, delivery, state) "
+        "VALUES ($1, $2, '{}'::jsonb, 'awaiting_terminal')",
+        execution_id,
+        thread_key,
+    )
+
+    row = {
+        "execution_id": execution_id,
+        "thread_key": thread_key,
+        "assignment_generation": 1,
+        "status": "running",
+        "delivery": {},
+        "metadata": retry_metadata,
+        "hard_deadline_at": dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=10),
+        "created_at": dt.datetime.now(dt.timezone.utc),
+        "claimed_at": dt.datetime.now(dt.timezone.utc),
+    }
+    session = SandboxSession(
+        sandbox_id=runtime_id,
+        thread_key=thread_key,
+        harness="codex",
+        engine="codex",
+    )
+
+    async def _codex_auth_failure_stream(*_args, **_kwargs):
+        yield {"data": json.dumps({"type": "error", "error": auth_error})}
+        yield {"data": json.dumps({"type": "turn.done", "result": ""})}
+
+    stop_session_mock = AsyncMock()
+    with (
+        patch("api.runtime_control.get_or_spawn", new=AsyncMock(return_value=session)),
+        patch(
+            "api.runtime_control.inject_stdin",
+            new=AsyncMock(return_value={"ok": True, "injected": True}),
+        ),
+        patch(
+            "api.runtime_control.get_backend",
+            return_value=SimpleNamespace(attach=AsyncMock()),
+        ),
+        patch(
+            "api.runtime_control._get_runtime",
+            return_value=SimpleNamespace(turn_counter=1),
+        ),
+        patch(
+            "api.runtime_control._stream_stdout",
+            _codex_auth_failure_stream,
+        ),
+        patch("api.runtime_control.stop_session", stop_session_mock),
+    ):
+        await _process_execution(db_pool, row)
+
+    execution = await db_pool.fetchrow(
+        "SELECT status, terminal_reason, result_text, error_text "
+        "FROM agent_execution_requests WHERE execution_id = $1",
+        execution_id,
+    )
+    assert execution is not None
+    assert execution["status"] == "failed_permanent"
+    assert execution["terminal_reason"] == "harness_auth_failed"
+    assert execution["result_text"] == (
+        "The agent hit a temporary runtime startup issue and could not complete the turn. "
+        "Please retry in a moment."
+    )
+    assert execution["error_text"] == auth_error
+    stop_session_mock.assert_awaited_once_with(thread_key)
+
+
+@pytest.mark.asyncio
 async def test_worker_classifies_embedded_raw_harness_auth_failure(db_pool):
     from api.runtime_control import _process_execution
 

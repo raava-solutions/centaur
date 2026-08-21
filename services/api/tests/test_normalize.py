@@ -116,6 +116,27 @@ class TestCodex:
             {"type": "system", "subtype": "init", "session_id": "thread-1"}
         ]
 
+    def test_error_uses_error_field(self):
+        result = normalize_harness_event(
+            "codex",
+            {
+                "type": "error",
+                "error": (
+                    "Your access token could not be refreshed. "
+                    "Please log out and sign in again."
+                ),
+            },
+        )
+        assert result == [
+            {
+                "type": "error",
+                "error": (
+                    "Your access token could not be refreshed. "
+                    "Please log out and sign in again."
+                ),
+            }
+        ]
+
     def test_item_completed_message(self):
         event = {
             "type": "item.completed",
