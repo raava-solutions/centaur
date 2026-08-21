@@ -36,6 +36,7 @@ type CodexSessionState = {
   commentaryByItemId: Map<string, string>
   harnessCommentaryText: string
   commentaryText: string
+  pendingReasoningText: string
   completedItemIds: Set<string>
   firstBufferedTextAt: number | null
   streamedCommentaryText: string
@@ -87,6 +88,10 @@ export class CodexSessionRenderer {
     const state = getState(agentSessionId)
     if (event?.session_id) state.threadId = String(event.session_id)
     if (event?.thread_id) state.threadId = String(event.thread_id)
+
+    if (event?.type !== 'reasoning' && flushPendingReasoningTask(state)) {
+      await this.publishActivitySummary(agentSessionId, state)
+    }
 
     trackAgentMessageLifecycle(event, state)
     ensureCommentarySegmentBreak(event, state)
@@ -201,13 +206,29 @@ export class CodexSessionRenderer {
       }
     }
 
-    const reasoningMessage = reasoningText(event).trim()
+    const reasoningMessage = reasoningText(event)
     if (reasoningMessage) {
+      if (event?.delta === true) {
+        state.pendingReasoningText += reasoningMessage
+        return {
+          threadId: state.threadId || undefined,
+          done: state.done,
+          streamedAnswerChars: state.deliveredAnswerChars
+        }
+      }
+      const reasoningBody = reasoningMessage.trim()
+      if (!reasoningBody) {
+        return {
+          threadId: state.threadId || undefined,
+          done: state.done,
+          streamedAnswerChars: state.deliveredAnswerChars
+        }
+      }
       const task: HarnessTask = {
         id: `reasoning-${++state.stepCounter}`,
         title: 'Thinking',
         status: 'complete',
-        details: [section([text(reasoningMessage)])],
+        details: [section([text(reasoningBody)])],
         output: []
       }
       state.taskByUseId.set(task.id, task)
@@ -243,6 +264,7 @@ export class CodexSessionRenderer {
     if (state.done) return
     if (threadId) state.threadId = threadId
     state.done = true
+    flushPendingReasoningTask(state)
     completeThinkingTasks(state)
     completeOpenTasks(state)
     await this.publishActivitySummary(agentSessionId, state, { final: true })
@@ -361,6 +383,7 @@ function getState(agentSessionId: string): CodexSessionState {
       commentaryByItemId: new Map(),
       harnessCommentaryText: '',
       commentaryText: '',
+      pendingReasoningText: '',
       completedItemIds: new Set(),
       firstBufferedTextAt: null,
       streamedCommentaryText: '',
@@ -557,16 +580,21 @@ function applyAgentMessageUpdate(
   }
 
   if (event?.type === 'assistant') {
-    const cumulative = assistantTextFromAssistantEvent(event)
-    if (!cumulative) return { bufferChanged: false }
+    const incoming = assistantTextFromAssistantEvent(event)
+    if (!incoming) return { bufferChanged: false }
     const key = buffer === 'answer' ? 'harnessAnswerText' : 'harnessCommentaryText'
     const before = state[key]
-    if (cumulative === before || before.endsWith(cumulative)) return { bufferChanged: false }
-    state[key] = cumulative.startsWith(before)
-      ? cumulative
+    if (event?.delta === true) {
+      state[key] = before + incoming
+      recomposeBuffers(state)
+      return { bufferChanged: true }
+    }
+    if (incoming === before || before.endsWith(incoming)) return { bufferChanged: false }
+    state[key] = incoming.startsWith(before)
+      ? incoming
       : before
-        ? `${before}\n${cumulative}`
-        : cumulative
+        ? `${before}\n${incoming}`
+        : incoming
     recomposeBuffers(state)
     return { bufferChanged: true }
   }
@@ -633,6 +661,21 @@ function textHash(value: string): string {
 function reasoningText(event: any): string {
   if (event?.type !== 'reasoning') return ''
   return String(event.text ?? event.thinking ?? '')
+}
+
+function flushPendingReasoningTask(state: CodexSessionState): boolean {
+  const body = state.pendingReasoningText.trim()
+  state.pendingReasoningText = ''
+  if (!body) return false
+  const task: HarnessTask = {
+    id: `reasoning-${++state.stepCounter}`,
+    title: 'Thinking',
+    status: 'complete',
+    details: [section([text(body)])],
+    output: []
+  }
+  state.taskByUseId.set(task.id, task)
+  return true
 }
 
 function isTerminalTurnEvent(event: any): boolean {

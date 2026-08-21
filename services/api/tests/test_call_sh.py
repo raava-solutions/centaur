@@ -10,6 +10,7 @@ from pathlib import Path
 
 
 CALL_SH = Path(__file__).resolve().parents[2] / "sandbox" / "call.sh"
+SYSTEM_PROMPT = CALL_SH.with_name("SYSTEM_PROMPT.md")
 
 
 class _AgentHandler(BaseHTTPRequestHandler):
@@ -209,6 +210,14 @@ def test_call_agent_runtime_uses_get_with_query_string():
     body = json.loads(result.stdout)
     assert body["persona_id"] == "legal"
     assert body["overlay"]["loaded"] is True
+
+
+def test_system_prompt_routes_hermes_gbrain_queries_through_call_helper():
+    prompt = SYSTEM_PROMPT.read_text(encoding="utf-8")
+
+    assert "/usr/local/bin/call raava_gbrain" in prompt
+    assert "In Hermes, run it with the terminal tool" in prompt
+    assert "not a native Hermes tool or a Python package to import" in prompt
 
 
 def test_call_discover_agent_lists_runtime_method():

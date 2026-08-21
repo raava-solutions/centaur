@@ -322,6 +322,7 @@ class _HermesBridge:
                 if isinstance(text, str) and text:
                     return {
                         "type": "assistant",
+                        "delta": True,
                         "session_id": session_id,
                         "message": {"role": "assistant", "content": [{"type": "text", "text": text}]},
                     }
@@ -330,7 +331,12 @@ class _HermesBridge:
             if isinstance(content, dict) and content.get("type") == "text":
                 text = content.get("text")
                 if isinstance(text, str) and text:
-                    return {"type": "reasoning", "session_id": session_id, "text": text}
+                    return {
+                        "type": "reasoning",
+                        "delta": True,
+                        "session_id": session_id,
+                        "text": text,
+                    }
         if session_update in {"tool_call", "tool_call_update"}:
             tool_id = update.get("toolCallId")
             if isinstance(tool_id, str) and tool_id:

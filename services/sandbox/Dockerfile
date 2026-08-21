@@ -58,17 +58,17 @@ ARG HERMES_ACP_VERSION=0.9.0
 # Hermes is opt-in at the Centaur engine layer. Keep it isolated from the
 # API environment and pin both the source commit and its ACP dependency.
 RUN set -eux; \
-    mkdir -p /tmp/hermes-agent; \
+    mkdir -p /opt/hermes-agent; \
     curl -fsSL "${HERMES_REPO}/archive/${HERMES_COMMIT}.tar.gz" \
       -o /tmp/hermes-agent.tar.gz; \
     echo "${HERMES_ARCHIVE_SHA256}  /tmp/hermes-agent.tar.gz" | sha256sum -c -; \
-    tar -xzf /tmp/hermes-agent.tar.gz --strip-components=1 -C /tmp/hermes-agent; \
+    tar -xzf /tmp/hermes-agent.tar.gz --strip-components=1 -C /opt/hermes-agent; \
     python3 -m venv /opt/hermes-venv; \
     /opt/hermes-venv/bin/pip install --no-cache-dir \
-      "/tmp/hermes-agent[acp]" "agent-client-protocol==${HERMES_ACP_VERSION}"; \
+      -e "/opt/hermes-agent[acp]" "agent-client-protocol==${HERMES_ACP_VERSION}"; \
     printf '%s\n' "${HERMES_COMMIT}" > /opt/hermes-source-commit; \
-    rm -rf /tmp/hermes-agent /tmp/hermes-agent.tar.gz; \
-    chown -R agent:agent /opt/hermes-venv /opt/hermes-source-commit; \
+    rm -f /tmp/hermes-agent.tar.gz; \
+    chown -R agent:agent /opt/hermes-agent /opt/hermes-venv /opt/hermes-source-commit; \
     /opt/hermes-venv/bin/hermes-acp --check
 
 # ── Nushell ─────────────────────────────────────────────────────────────────

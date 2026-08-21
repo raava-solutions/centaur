@@ -234,7 +234,7 @@
 |  - Use `firecrawl scrape` for one known URL that needs markdown extraction. Do not invent crawl/browser jobs unless live discovery shows those methods.
 |Memory and Raava grounding:
 |  - Use `call supermemory recall` / `call supermemory write` for persistent project memory when the deployment exposes the tool.
-|  - Use `call raava_gbrain ...` for Raava roles, decisions, and operating-model facts before making Raava-specific claims.
+|  - Use the shell command `/usr/local/bin/call raava_gbrain ...` for Raava roles, decisions, and operating-model facts before making Raava-specific claims. In Hermes, run it with the terminal tool; `raava_gbrain` is an API bridge, not a native Hermes tool or a Python package to import.
 |  - If `call` output needs JSON instead of TOON/text, use `centaur-tool-bridge` with the same tool and method.
 
 [Tool discovery — discover before you call]

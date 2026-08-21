@@ -217,6 +217,19 @@ def test_wrapper_bridges_fragmented_acp_frames_and_reuses_session(tmp_path: Path
     assert unsupported["payload"]["error"]["code"] == -32601
 
 
+def test_wrapper_marks_acp_text_chunks_as_deltas(tmp_path: Path) -> None:
+    result = _run_wrapper(tmp_path, ["first"])
+
+    assert result.returncode == 0, result.stderr
+    text_events = [
+        event
+        for event in _events(result)
+        if event["type"] in {"assistant", "reasoning"}
+    ]
+    assert text_events
+    assert all(event["delta"] is True for event in text_events)
+
+
 def test_wrapper_surfaces_acp_error_without_fabricating_result(tmp_path: Path) -> None:
     result = _run_wrapper(tmp_path, ["failure"], error=True)
 
@@ -246,6 +259,7 @@ def test_sandbox_image_pins_hermes_source_and_acp_dependency() -> None:
     assert 'ARG HERMES_ARCHIVE_SHA256=eaa8a076f8b506365a43fd29dec40a8b7b8278576e330a13a771fc397061b85c' in contents
     assert '"${HERMES_REPO}/archive/${HERMES_COMMIT}.tar.gz"' in contents
     assert 'sha256sum -c -' in contents
+    assert '-e "/opt/hermes-agent[acp]"' in contents
     assert '"agent-client-protocol==${HERMES_ACP_VERSION}"' in contents
     assert "COPY --link --chmod=755 services/sandbox/hermes-acp-wrapper.py" in contents
 

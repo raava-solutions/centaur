@@ -1525,6 +1525,39 @@ describe('CodexSessionRenderer', () => {
     expect(countOccurrences(visible, 'Hello.')).toBe(1)
   })
 
+  it('coalesces Hermes ACP text fragments without line breaks or per-token Thinking tasks', async () => {
+    const calls: Array<{ method: string; params: any }> = []
+    const client = makeFakeSlackClient(calls)
+    const { sessionId } = await new AgentSessionRenderer(client as any).open({
+      channel: 'C123',
+      parentTs: '1778866921.505479',
+      recipientTeamId: 'T123',
+      recipientUserId: 'U123',
+      title: 'Centaur execution'
+    })
+    const renderer = new CodexSessionRenderer(client as any)
+
+    for (const fragment of ['I', ' am', ' checking', ' the', ' runtime.']) {
+      await renderer.event(sessionId, { type: 'reasoning', delta: true, text: fragment })
+    }
+    for (const fragment of ['Hey', ' —', ' checking', ' in', ' again.']) {
+      await renderer.event(sessionId, {
+        type: 'assistant',
+        delta: true,
+        message: { content: [{ type: 'text', text: fragment }] }
+      })
+    }
+    await renderer.event(sessionId, { type: 'turn.done', result: 'Hey — checking in again.' })
+
+    const visible = visibleMarkdown(calls)
+    expect(visible).toBe('Hey — checking in again.')
+    expect(visible).not.toContain('\n')
+
+    const thinkingTasks = planTasksFromStop(calls).filter(task => task.title === 'Thinking')
+    expect(thinkingTasks).toHaveLength(1)
+    expect(richTextPlain(thinkingTasks[0]?.details)).toBe('I am checking the runtime.')
+  })
+
   it('does not log a canonical correction for plain delta streams without item.completed', async () => {
     const logCalls: unknown[][] = []
     const originalLog = console.log
