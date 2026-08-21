@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -218,6 +219,17 @@ def test_system_prompt_routes_hermes_gbrain_queries_through_call_helper():
     assert "/usr/local/bin/call raava_gbrain" in prompt
     assert "In Hermes, run it with the terminal tool" in prompt
     assert "not a native Hermes tool or a Python package to import" in prompt
+
+
+def test_system_prompt_does_not_trigger_hermes_secret_exfiltration_guard():
+    prompt = SYSTEM_PROMPT.read_text(encoding="utf-8")
+    hermes_exfil_curl = re.compile(
+        r"curl\s+[^\n]{0,2048}\$\{?\w*(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)",
+        re.IGNORECASE,
+    )
+
+    assert hermes_exfil_curl.search(prompt) is None
+    assert prompt.count("call agent query") >= 2
 
 
 def test_call_discover_agent_lists_runtime_method():

@@ -113,10 +113,7 @@
 |
 |[Centaur self-query — inspect your own database]
 |You can query Centaur's internal database (chat_messages, attachments, sandbox_sessions) via:
-|  curl -sS -X POST "$CENTAUR_API_URL/agent/query" \
-|    -H "Authorization: Bearer $CENTAUR_API_KEY" \
-|    -H "Content-Type: application/json" \
-|    -d '{"sql":"SELECT id, thread_key, name, mime_type, length(data) as bytes FROM attachments ORDER BY created_at DESC LIMIT 10"}'
+|  call agent query '{"sql":"SELECT id, thread_key, name, mime_type, length(data) as bytes FROM attachments ORDER BY created_at DESC LIMIT 10"}'
 |Read-only SELECT only. Binary data (e.g. attachment bytes) is shown as "<N bytes>".
 |
 |[Observability — logs + execution data]
@@ -151,10 +148,7 @@
 |  call vmetrics metric_names                                  → list all agent_* metric names
 |
 |Execution data (Postgres via self-query):
-|  curl -sS -X POST "$CENTAUR_API_URL/agent/query" \
-|    -H "Authorization: Bearer $CENTAUR_API_KEY" \
-|    -H "Content-Type: application/json" \
-|    -d '{"sql":"SELECT execution_id, thread_key, status, harness, created_at, started_at, completed_at, EXTRACT(EPOCH FROM (completed_at - started_at)) as duration_s, result_text FROM agent_execution_requests ORDER BY created_at DESC LIMIT 20"}'
+|  call agent query '{"sql":"SELECT execution_id, thread_key, status, harness, created_at, started_at, completed_at, EXTRACT(EPOCH FROM (completed_at - started_at)) as duration_s, result_text FROM agent_execution_requests ORDER BY created_at DESC LIMIT 20"}'
 |
 |Available tables: chat_messages, sandbox_sessions, attachments, api_keys,
 |agent_runtime_assignments, agent_message_requests, agent_execution_requests,
