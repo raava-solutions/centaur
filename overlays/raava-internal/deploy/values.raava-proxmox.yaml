@@ -95,7 +95,7 @@ api:
   warmPoolEnabled: true
   image:
     repository: centaur-api
-    tag: slack-recovery-e39e122b
+    tag: slack-hermes-f8663481
     pullPolicy: IfNotPresent
   resources:
     requests:
