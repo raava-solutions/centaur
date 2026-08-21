@@ -1740,8 +1740,10 @@ async def test_worker_requeues_raw_harness_auth_error_once_on_fresh_runtime(db_p
     )
     await db_pool.execute(
         "INSERT INTO sandbox_sessions ("
-        "thread_key, sandbox_id, harness, engine, state, started_at, updated_at, last_delivered_id"
-        ") VALUES ($1, $2, 'amp', 'amp', 'running', NOW(), NOW(), 'msg-auth')",
+        "thread_key, sandbox_id, harness, engine, state, started_at, updated_at, "
+        "last_delivered_id, agent_thread_id"
+        ") VALUES ($1, $2, 'amp', 'amp', 'running', NOW(), NOW(), "
+        "'msg-auth', 'runtime-local-thread')",
         thread_key,
         initial_runtime_id,
     )
@@ -1848,11 +1850,14 @@ async def test_worker_requeues_raw_harness_auth_error_once_on_fresh_runtime(db_p
         )
         assert delivered_message is not None
         assert delivered_message["delivered_execution_id"] is None
-        cursor = await db_pool.fetchval(
-            "SELECT last_delivered_id FROM sandbox_sessions WHERE thread_key = $1",
+        retry_session = await db_pool.fetchrow(
+            "SELECT last_delivered_id, agent_thread_id FROM sandbox_sessions "
+            "WHERE thread_key = $1",
             thread_key,
         )
-        assert cursor is None
+        assert retry_session is not None
+        assert retry_session["last_delivered_id"] is None
+        assert retry_session["agent_thread_id"] is None
 
         outbox = await db_pool.fetchrow(
             "SELECT state, final_payload FROM agent_final_delivery_outbox WHERE execution_id = $1",

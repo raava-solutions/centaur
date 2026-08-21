@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 import api.warm_pool as warm_pool
+from api.sandbox.base import SandboxSession
 
 
 @pytest.fixture(autouse=True)
@@ -36,6 +37,41 @@ async def test_start_replenish_loop_skips_unsupported_backend(
     task = await warm_pool.start_replenish_loop()
 
     assert task is None
+
+
+@pytest.mark.asyncio
+async def test_spawn_warm_container_uses_hermes_engine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeBackend:
+        supports_warm_pool = True
+
+        async def create(
+            self,
+            thread_key: str,
+            harness: str,
+            engine: str,
+            *,
+            warm: bool,
+        ) -> SandboxSession:
+            assert harness == "hermes"
+            assert engine == "hermes"
+            assert warm is True
+            return SandboxSession(
+                sandbox_id="sandbox-hermes",
+                thread_key=thread_key,
+                harness=harness,
+                engine=engine,
+            )
+
+    monkeypatch.setattr(warm_pool, "POOL_HARNESS", "hermes")
+    monkeypatch.setattr("api.warm_pool.get_backend", lambda: FakeBackend())
+
+    spawned = await warm_pool._spawn_warm_container()
+
+    assert spawned is not None
+    assert spawned.harness == "hermes"
+    assert spawned.engine == "hermes"
 
 
 @pytest.mark.asyncio

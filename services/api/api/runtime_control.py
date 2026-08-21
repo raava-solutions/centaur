@@ -2182,8 +2182,8 @@ async def _requeue_execution_after_raw_harness_auth_failure(
         execution_id,
     )
     await pool.execute(
-        "UPDATE sandbox_sessions SET last_delivered_id = NULL, updated_at = NOW() "
-        "WHERE thread_key = $1",
+        "UPDATE sandbox_sessions SET last_delivered_id = NULL, "
+        "agent_thread_id = NULL, updated_at = NOW() WHERE thread_key = $1",
         thread_key,
     )
     await append_execution_state(
