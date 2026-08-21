@@ -90,7 +90,7 @@ api:
   warmPoolEnabled: true
   image:
     repository: centaur-api
-    tag: hermes-acp-198d4bab-harness1
+    tag: hermes-prompt-74b3fb86
     pullPolicy: IfNotPresent
   resources:
     requests:
