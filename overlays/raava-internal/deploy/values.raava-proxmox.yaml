@@ -1,0 +1,162 @@
+# Raava production values — Centaur on the Proxmox k3s VM (centaur-k3s / VM 110).
+#
+# Layer on top of the chart defaults:
+#   helm upgrade --install centaur contrib/chart -n centaur \
+#     -f contrib/chart/values.yaml \
+#     -f overlays/raava-internal/deploy/values.raava-proxmox.yaml
+#
+# This file targets the CURRENT chart shape: api-rs (Rust control plane) +
+# slackbotv2 + agent-sandbox CRDs. The pre-Rust keys (`api:`, `slackbot:`,
+# `tokenBroker:`, `overlay.image`) no longer exist and must not be reintroduced.
+#
+# Release flow
+#   1. Merge to main -> publish-images.yml builds centaur-api-rs, centaur-slackbotv2,
+#      centaur-agent, centaur-iron-proxy (amd64 + arm64).
+#   2. Push a `v*` tag -> the same images are re-published under the semver tag.
+#   3. Bump `x-release.tag` below (one line), then apply on the box.
+#   Nothing deploys to Proxmox automatically. The box still pulls side-loaded
+#   k3s containerd images (pullPolicy IfNotPresent), so a release must either
+#   `k3s ctr images import` the new tags or switch `x-release.registry` to a
+#   registry the node can pull anonymously.
+x-release: &release
+  registry: "" # empty = bare names, i.e. side-loaded k3s containerd images
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+# --- Secret backend: 1Password Connect (writable token on Engineering) ----------
+# The Codex OAuth refresh loop needs write scope on the vault; a read-only token
+# makes access-token issuance fail with rc.2.
+ironProxy:
+  secretSource: onepassword-connect
+  secretTtl: 10m
+  image:
+    repository: centaur-iron-proxy
+    <<: *release
+
+# Stands up the in-cluster Connect API+sync pods. Gated on BOTH this flag and
+# ironProxy.secretSource == "onepassword-connect". The credentials Secret itself is
+# created out of band by contrib/scripts/bootstrap-k8s-secrets.sh.
+onepasswordConnect:
+  connect:
+    create: true
+    credentialsName: centaur-onepassword-connect-credentials
+    credentialsKey: 1password-credentials.json
+    serviceType: ClusterIP
+
+secretManager:
+  existingSecretName: centaur-infra-env
+  envPrefix: ""
+
+# --- Tools + overlay delivery ---------------------------------------------------
+# Upstream's supported overlay mechanism: repo-cache clones each source and the
+# tools-bootstrap init container copies `subdir` into every sandbox at /app/tools.
+# Later sources shadow earlier ones on directory-name collision, so the Raava
+# overlay wins over base tools without forking them.
+toolServer:
+  enabled: true
+  repo: raava-solutions/centaur
+  ref: "" # pin to the release tag when x-release.tag is pinned
+  subdir: tools
+  extraSources:
+    - repo: raava-solutions/centaur
+      ref: ""
+      subdir: overlays/raava-internal/tools
+
+# Raava sandbox system prompt. The chart renders this into a ConfigMap and sets
+# CENTAUR_OVERLAY_DIR on api-rs only -- no template mounts it into a sandbox pod,
+# so this value is inert today. See deploy/READINESS.md (sandbox prompt and skills).
+# Populate it with --set-file so this file never drifts from the source:
+#   --set-file overlay.systemPrompt=overlays/raava-internal/services/sandbox/SYSTEM_PROMPT.md
+overlay:
+  mountPath: /app/overlay/org
+  systemPrompt: ""
+
+# --- Control plane --------------------------------------------------------------
+apiRs:
+  enabled: true
+  image:
+    repository: centaur-api-rs
+    <<: *release
+  # Hosted gbrain grounding. The dev profile points this at a 127.0.0.1:8087
+  # sidecar that does not exist on Proxmox.
+  extraEnv:
+    RAAVA_GBRAIN_BASE_URL: "https://raava-brain-gbrain-lmbn6fkciq-ue.a.run.app"
+  # Pre-spawned sandboxes for near-instant turns. A running warm sandbox also
+  # keeps the agent image referenced, easing kubelet image GC.
+  sandboxWarmPoolSize: 2
+  ironProxy:
+    mode: enabled
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 1536Mi
+
+slackbotv2:
+  enabled: true
+  image:
+    repository: centaur-slackbotv2
+    <<: *release
+  userName: centaur
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 384Mi
+
+# --- Sandboxes ------------------------------------------------------------------
+sandbox:
+  image:
+    repository: centaur-agent
+    <<: *release
+  # codex | amp | claudecode. Must agree with the agent image's default CMD and
+  # with the iron-proxy auth fragment api-rs registers.
+  harnessEngine: codex
+  codexAuthMode: access_token
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+
+# --- State ----------------------------------------------------------------------
+postgres:
+  image:
+    pullPolicy: IfNotPresent
+  persistence:
+    enabled: true
+    size: 20Gi
+    storageClassName: local-path
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+
+# --- Cluster fit ----------------------------------------------------------------
+# Sized for the 8 GiB / 2 vCPU VM so sandboxes cannot evict the control plane.
+# The agent-sandbox controller is installed standalone (Phase A, namespace
+# agent-sandbox-system, cluster-scoped); keep the chart copy off to avoid a
+# duplicate controller and a CRD-ownership conflict.
+agentSandbox:
+  enabled: false
+
+# --- Not expressible as chart values today --------------------------------------
+# Gaps carried forward from the pre-Rust overlay. Each needs a small chart or
+# api-rs change; none blocks development on this branch.
+#   1. Hermes harness. Retired with the Python control plane. Re-adding it means
+#      a new harnessEngine value plus an iron-proxy auth fragment in api-rs, and
+#      a wrapper in services/sandbox/Dockerfile. Parked as its own ticket.
+#   2. Overlay workflows. WORKFLOW_DIRS is built as <repo-cache>/<repo>/workflows
+#      and ignores toolServer.extraSources[].subdir, so overlay workflows in
+#      overlays/raava-internal/workflows are not discovered. Upstream fix: honour
+#      subdir when composing WORKFLOW_DIRS.
+#   3. iron-token-broker. The single-writer Codex OAuth refresher was a Raava
+#      chart template; it is not upstream. Re-add as an overlay template or move
+#      the refresh loop into api-rs.
+#   4. cloudflared. Applied as the standalone cloudflared-centaur.yaml manifest,
+#      never as a chart value. Needs the centaur-cloudflared-credentials secret.

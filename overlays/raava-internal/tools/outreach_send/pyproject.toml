@@ -1,0 +1,26 @@
+[project]
+name = "outreach_send"
+version = "0.1.0"
+description = "GTM operator email transport — the system's sole email sender via AgentMail."
+requires-python = ">=3.11"
+dependencies = ["httpx>=0.27"]
+
+[tool.centaur]
+module = "client.py"
+
+[tool.outreach_send.config]
+required_for_live_send = [
+    "OUTREACH_APPROVER_USER_IDS",
+    "OUTREACH_LIVE_SEND_ENABLED",
+    "CAN_SPAM_ADDRESS",
+]
+optional = [
+    "MAX_SENDS_PER_DAY",
+    "OUTREACH_SEND_STATE_PATH",
+]
+
+[[tool.centaur.secrets]]
+type = "http"
+name = "AGENTMAIL_API_KEY"
+match_headers = ["Authorization"]
+hosts = ["api.agentmail.to"]

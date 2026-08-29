@@ -1,0 +1,9 @@
+[project]
+name = "enoch"
+description = "Raava engineering architecture and implementation lead"
+version = "0.1.0"
+
+[tool.centaur]
+type = "persona"
+engine = "codex"
+prompt = "PROMPT.md"

@@ -1,0 +1,46 @@
+# Raava local dogfood values — 1Password Connect secret backend.
+#
+# Use this only to reproduce the production secret path on a local cluster:
+# tools and the harness receive placeholders, and iron-proxy resolves the real
+# values through an in-cluster 1Password Connect API. For ordinary local work the
+# env-backed default in values.raava-local.yaml is enough and needs no Connect
+# credentials.
+#
+# Layer last, after the base and the local file:
+#   helm upgrade --install centaur contrib/chart -n centaur \
+#     -f contrib/chart/values.yaml \
+#     -f overlays/raava-internal/deploy/values.raava-local.yaml \
+#     -f overlays/raava-internal/deploy/values.raava-local-connect.yaml
+# Helm merges key by key and the last file wins, so the `env` source in
+# values.raava-local.yaml is replaced by the source below. Nothing else in the
+# two files overlaps.
+#
+# Keep only the settings this file actually changes. Everything else that the
+# pre-Rust version of this file carried was a default:
+#   - secretTtl 10m                = ironProxy.secretTtl in the chart
+#   - connect.serviceType ClusterIP, api.logLevel info, sync.logLevel info
+#                                  = defaults of the vendored connect-2.4.1 subchart
+#   - connect.credentialsName, connect.credentialsKey
+#                                  = contrib/chart/values.yaml
+#   - secretManager.*              = contrib/chart/values.yaml
+#   - api.firewallProxy.enabled    = apiRs.ironProxy.mode: enabled, the chart default
+# The dead `ironProxy.manager.secretSource` key is dropped: one
+# ironProxy.secretSource now drives both api-rs and the proxy config.
+
+# Both settings below are required. The chart deploys the Connect API and sync
+# pods only when create is true AND ironProxy.secretSource is
+# onepassword-connect; either one alone changes nothing.
+onepasswordConnect:
+  connect:
+    create: true
+
+# The Connect credentials Secret is created out of band, not by this file:
+# contrib/scripts/bootstrap-k8s-secrets.sh writes
+# centaur-onepassword-connect-credentials. OP_CONNECT_TOKEN and OP_VAULT must
+# also exist in centaur-infra-env.
+ironProxy:
+  # Use a vault token with write scope. The Codex OAuth refresh loop writes the
+  # rotated refresh token back to the vault, and a read-only token makes access
+  # token issuance fail. Keep the vault limited to the Raava Centaur item set:
+  # never grant Connect access to Personal, Private, or Employee vaults.
+  secretSource: onepassword-connect

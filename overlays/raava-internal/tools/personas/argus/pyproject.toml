@@ -1,0 +1,9 @@
+[project]
+name = "argus"
+description = "Raava fleet operations, runtime, and incident lead"
+version = "0.1.0"
+
+[tool.centaur]
+type = "persona"
+engine = "codex"
+prompt = "PROMPT.md"
