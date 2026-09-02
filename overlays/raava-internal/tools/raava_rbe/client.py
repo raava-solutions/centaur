@@ -1,8 +1,8 @@
-"""Raava gbrain grounding tool.
+"""Raava RBE grounding tool.
 
-The tool has a deterministic local baseline so tests and local dogfood can run
-without network access. When ``RAAVA_GBRAIN_BASE_URL`` is configured, methods
-try the hosted service first and fall back to the local baseline on failure.
+Cloudflare RBE is the company knowledge read surface. A deterministic local
+roster baseline keeps local tests and degraded deployments honest when RBE is
+unavailable.
 """
 
 from __future__ import annotations
@@ -12,14 +12,13 @@ import json
 import os
 from pathlib import Path
 import sys
-import time
 from typing import Any
 
 import httpx
 
 from centaur_sdk import secret
 
-DEFAULT_GBRAIN_URL = "https://raava-brain-gbrain-lmbn6fkciq-ue.a.run.app"
+DEFAULT_RBE_URL = "https://brain.raava.dev"
 
 
 def _load_roles_module():
@@ -33,17 +32,11 @@ def _load_roles_module():
     return module
 
 
-class RaavaGbrainClient:
+class RaavaRbeClient:
     def __init__(self) -> None:
         self._roles = _load_roles_module()
-        self.base_url = os.getenv("RAAVA_GBRAIN_BASE_URL", "").rstrip("/")
-        self.oauth_json = os.getenv("RAAVA_GBRAIN_OAUTH_JSON", "")
-        self._access_token = ""
-        self._access_token_expires_at = 0.0
-        # Prefer the proxy-injected OAuth bearer declared in pyproject.toml.
-        # This legacy placeholder remains for break-glass deployments that
-        # still provide a static hosted gbrain bearer.
-        self.api_key = self._optional_secret("RAAVA_GBRAIN_API_KEY", "")
+        self.base_url = os.getenv("RAAVA_RBE_BASE_URL", DEFAULT_RBE_URL).rstrip("/")
+        self.api_key = self._optional_secret("RAAVA_RBE_API_KEY")
 
     def _optional_secret(self, key: str, default: str = "") -> str:
         try:
@@ -100,71 +93,31 @@ class RaavaGbrainClient:
     def lookup(self, query: str, limit: int = 5) -> dict[str, Any]:
         return self.search_decisions(query, limit=limit)
 
-    def read_page(self, path: str) -> dict[str, Any]:
+    def read_page(self, slug: str) -> dict[str, Any]:
         if not self.base_url:
-            return self._offline_page(path)
-        remote = self._remote_tool("get_page", {"path": path})
+            return self._offline_page(slug)
+        remote = self._remote_tool("get", {"slug": slug})
         if remote is not None:
             return remote
-        return self._offline_page(path)
+        return self._offline_page(slug)
 
-    def write_learning(
-        self,
-        summary: str,
-        *,
-        title: str | None = None,
-        path: str | None = None,
-        tags: list[str] | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        # Match read_page/search_decisions: gate only on base_url and let
-        # _remote_tool/_bearer_token resolve auth (static key OR OAuth). The
-        # earlier `bool(self.api_key)` pre-check silently dropped writes on
-        # OAuth-only deployments, which are the documented primary auth path.
-        if not self.base_url:
-            return {
-                "written": False,
-                "reason": "gbrain unavailable",
-            }
-
-        arguments: dict[str, Any] = {"summary": summary}
-        if title:
-            arguments["title"] = title
-        if path:
-            arguments["path"] = path
-        if tags:
-            arguments["tags"] = tags
-        if metadata:
-            arguments["metadata"] = metadata
-
-        remote = self._remote_tool("add_timeline_entry", arguments)
-        if remote is None:
-            return {
-                "written": False,
-                "reason": "gbrain unavailable",
-            }
-        return {
-            "written": True,
-            "result": remote,
-        }
-
-    def _offline_page(self, path: str) -> dict[str, Any]:
+    def _offline_page(self, slug: str) -> dict[str, Any]:
         return {
             "source": "offline",
-            "path": path,
+            "slug": slug,
             "unavailable": True,
-            "message": "Hosted gbrain page reads are unavailable in this environment.",
+            "message": "Cloudflare RBE page reads are unavailable in this environment.",
         }
 
-    def _remote_query(self, query: str, *, limit: int | None = None) -> dict[str, Any] | None:
-        payload: dict[str, Any] = {"query": query}
+    def _remote_query(
+        self, query: str, *, limit: int | None = None
+    ) -> dict[str, Any] | None:
+        payload: dict[str, Any] = {"q": query}
         if limit is not None:
             payload["limit"] = limit
         data = self._remote_tool("query", payload)
         if data is None:
             return None
-        if isinstance(data, dict) and data.get("source") == "hosted-gbrain":
-            return data
         return self._normalize_tool_result(data, query=query, limit=limit)
 
     def _remote_tool(
@@ -178,9 +131,9 @@ class RaavaGbrainClient:
             "accept": "application/json, text/event-stream",
             "content-type": "application/json",
         }
-        access_token = self._bearer_token()
-        if access_token:
-            headers["authorization"] = f"Bearer {access_token}"
+        bearer = self._bearer_token()
+        if bearer:
+            headers["authorization"] = f"Bearer {bearer}"
         payload = {
             "jsonrpc": "2.0",
             "id": 1,
@@ -201,43 +154,7 @@ class RaavaGbrainClient:
         return data if isinstance(data, dict) else {"result": data}
 
     def _bearer_token(self) -> str:
-        if self.api_key and self.api_key != "RAAVA_GBRAIN_API_KEY":
-            return self.api_key
-        if not self.oauth_json:
-            return ""
-        now = time.time()
-        if self._access_token and now < self._access_token_expires_at - 30:
-            return self._access_token
-        try:
-            credential = json.loads(self.oauth_json)
-            client_id = credential["client_id"]
-            client_secret = credential["client_secret"]
-            response = httpx.post(
-                f"{self.base_url}/token",
-                data={
-                    "grant_type": "client_credentials",
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                    "scope": "read",
-                },
-                headers={
-                    "accept": "application/json",
-                    "content-type": "application/x-www-form-urlencoded",
-                },
-                timeout=10.0,
-            )
-            response.raise_for_status()
-            data = response.json()
-            token = data.get("access_token")
-            if not isinstance(token, str) or not token:
-                return ""
-            expires_in = data.get("expires_in")
-            ttl = float(expires_in) if isinstance(expires_in, int | float) else 300.0
-            self._access_token = token
-            self._access_token_expires_at = now + ttl
-            return token
-        except Exception:
-            return ""
+        return self.api_key
 
     def _normalize_tool_result(
         self, data: dict[str, Any], *, query: str, limit: int | None
@@ -245,7 +162,7 @@ class RaavaGbrainClient:
         text = self._extract_text(data)
         results = self._extract_results(data)
         result: dict[str, Any] = {
-            "source": "hosted-gbrain",
+            "source": "rbe",
             "query": query,
             "results": results,
             "raw": data,
@@ -338,5 +255,5 @@ class RaavaGbrainClient:
         return data
 
 
-def _client() -> RaavaGbrainClient:
-    return RaavaGbrainClient()
+def _client() -> RaavaRbeClient:
+    return RaavaRbeClient()

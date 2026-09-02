@@ -182,9 +182,7 @@ def test_parser_rejects_unknown_mode() -> None:
 
 
 def test_parser_typed_gcp_auth() -> None:
-    secret = _parse_secret(
-        {"type": "gcp_auth", "name": "GCP_GCLOUD_CREDENTIAL"}
-    )
+    secret = _parse_secret({"type": "gcp_auth", "name": "GCP_GCLOUD_CREDENTIAL"})
     assert isinstance(secret, GcpAuthSecret)
     assert secret.secret_ref == "GCP_GCLOUD_CREDENTIAL"
     assert secret.hosts == ()
@@ -291,28 +289,29 @@ def test_research_tool_provider_secrets_are_host_scoped() -> None:
     firecrawl_pyproject = REPO_ROOT / "tools/research/firecrawl/pyproject.toml"
     supermemory_pyproject = REPO_ROOT / "tools/memory/supermemory/pyproject.toml"
     websearch_pyproject = REPO_ROOT / "tools/research/websearch/pyproject.toml"
-    gbrain_pyproject = REPO_ROOT / "overlays/raava-internal/tools/raava_gbrain/pyproject.toml"
+    rbe_pyproject = REPO_ROOT / "overlays/raava-internal/tools/raava_rbe/pyproject.toml"
     with firecrawl_pyproject.open("rb") as f:
         firecrawl = tomllib.load(f)
     with supermemory_pyproject.open("rb") as f:
         supermemory = tomllib.load(f)
     with websearch_pyproject.open("rb") as f:
         websearch = tomllib.load(f)
-    with gbrain_pyproject.open("rb") as f:
-        gbrain = tomllib.load(f)
+    with rbe_pyproject.open("rb") as f:
+        rbe = tomllib.load(f)
 
     firecrawl_secrets = _parse_secrets(firecrawl["tool"]["centaur"]["secrets"])
     supermemory_secrets = _parse_secrets(supermemory["tool"]["centaur"]["secrets"])
     websearch_secrets = _parse_secrets(websearch["tool"]["centaur"]["secrets"])
-    gbrain_secrets = _parse_secrets(gbrain["tool"]["centaur"]["secrets"])
+    rbe_secrets = _parse_secrets(rbe["tool"]["centaur"]["secrets"])
 
     firecrawl_key = next(s for s in firecrawl_secrets if s.name == "FIRECRAWL_API_KEY")
     supermemory_key = next(
         s for s in supermemory_secrets if s.name == "SUPERMEMORY_API_KEY"
     )
-    openrouter_key = next(s for s in websearch_secrets if s.name == "OPENROUTER_API_KEY")
-    gbrain_oauth = next(s for s in gbrain_secrets if s.name == "RAAVA_GBRAIN_OAUTH")
-    gbrain_key = next(s for s in gbrain_secrets if s.name == "RAAVA_GBRAIN_API_KEY")
+    openrouter_key = next(
+        s for s in websearch_secrets if s.name == "OPENROUTER_API_KEY"
+    )
+    rbe_key = next(s for s in rbe_secrets if s.name == "RAAVA_RBE_API_KEY")
 
     assert isinstance(firecrawl_key, HttpSecret)
     assert firecrawl_key.hosts == ("api.firecrawl.dev",)
@@ -323,19 +322,9 @@ def test_research_tool_provider_secrets_are_host_scoped() -> None:
     assert isinstance(openrouter_key, HttpSecret)
     assert openrouter_key.hosts == ("openrouter.ai",)
     assert openrouter_key.match_headers == ("Authorization",)
-    assert isinstance(gbrain_oauth, OAuthTokenSecret)
-    assert gbrain_oauth.hosts == ("raava-brain-gbrain-lmbn6fkciq-ue.a.run.app",)
-    assert gbrain_oauth.grant == "client_credentials"
-    assert gbrain_oauth.token_endpoint == (
-        "https://raava-brain-gbrain-lmbn6fkciq-ue.a.run.app/token"
-    )
-    assert dict(gbrain_oauth.fields) == {
-        "client_id": OAuthFieldSource("RAAVA_GBRAIN_OAUTH", "client_id"),
-        "client_secret": OAuthFieldSource("RAAVA_GBRAIN_OAUTH", "client_secret"),
-    }
-    assert isinstance(gbrain_key, HttpSecret)
-    assert gbrain_key.hosts == ("raava-brain-gbrain-lmbn6fkciq-ue.a.run.app",)
-    assert gbrain_key.match_headers == ("Authorization",)
+    assert isinstance(rbe_key, HttpSecret)
+    assert rbe_key.hosts == ("brain.raava.dev",)
+    assert rbe_key.match_headers == ("Authorization",)
 
 
 def test_parser_header_secret_rejects_empty_hosts() -> None:
@@ -358,6 +347,7 @@ _REFRESH_FIELDS = {
     "client_id": {"secret_ref": "GOOGLE_TOKEN_JSON", "json_key": "client_id"},
     "client_secret": {"secret_ref": "GOOGLE_TOKEN_JSON", "json_key": "client_secret"},
 }
+
 
 def test_parser_typed_oauth_token_refresh() -> None:
     secret = _parse_secret(
@@ -432,9 +422,7 @@ def test_parser_oauth_token_rejects_unknown_grant() -> None:
 
 def test_parser_oauth_token_requires_hosts() -> None:
     with pytest.raises(ValueError, match="'hosts' must be a non-empty array"):
-        _parse_secret(
-            {"type": "oauth_token", "grant": "refresh_token", "name": "X"}
-        )
+        _parse_secret({"type": "oauth_token", "grant": "refresh_token", "name": "X"})
 
 
 def test_parser_oauth_token_requires_fields() -> None:
@@ -553,9 +541,7 @@ def test_parser_typed_oauth_token_jwt_bearer() -> None:
     fields = dict(secret.fields)
     assert fields["issuer"] == OAuthFieldSource("DOCUSIGN_INTEGRATION_KEY")
     assert fields["subject"] == OAuthFieldSource("DOCUSIGN_USER_GUID")
-    assert fields["private_key"] == OAuthFieldSource(
-        "DOCUSIGN_BUNDLE", "private_key"
-    )
+    assert fields["private_key"] == OAuthFieldSource("DOCUSIGN_BUNDLE", "private_key")
     assert fields["private_key_id"] == OAuthFieldSource("DOCUSIGN_KEY_ID")
 
 
@@ -651,7 +637,9 @@ def test_parser_oauth_token_token_endpoint_headers_accepts_bare_string() -> None
     )
 
 
-def test_parser_oauth_token_token_endpoint_headers_accepts_table_with_json_key() -> None:
+def test_parser_oauth_token_token_endpoint_headers_accepts_table_with_json_key() -> (
+    None
+):
     secret = _parse_secret(
         {
             "type": "oauth_token",
@@ -764,9 +752,7 @@ def test_parser_typed_hmac_sign_full_example() -> None:
     assert secret.timestamp_format == "unix_seconds"
     # credentials sort by name so the rendered config is deterministic
     assert [name for name, _ in secret.credentials] == ["key", "passphrase", "secret"]
-    assert secret.headers[0] == HmacHeader(
-        "FX-ACCESS-KEY", "{{.Credentials.key}}"
-    )
+    assert secret.headers[0] == HmacHeader("FX-ACCESS-KEY", "{{.Credentials.key}}")
     assert secret.allow_chunked_body is False
 
 
@@ -827,9 +813,7 @@ def test_parser_hmac_sign_allow_chunked_body_must_be_bool() -> None:
 
 def test_parser_hmac_sign_header_requires_name_and_value() -> None:
     with pytest.raises(ValueError, match="header\\[0\\] requires a non-empty 'value'"):
-        _parse_secret(
-            _hmac_entry(headers=[{"name": "X-Sig", "value": ""}])
-        )
+        _parse_secret(_hmac_entry(headers=[{"name": "X-Sig", "value": ""}]))
 
 
 # ── port allocation ─────────────────────────────────────────────────────────
@@ -939,9 +923,7 @@ def test_render_gcp_auth_defaults_hosts_and_scopes_when_unset() -> None:
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
     gcp = next(t for t in cfg["transforms"] if t["name"] == "gcp_auth")
     assert gcp["config"]["rules"] == [{"host": "*.googleapis.com"}]
-    assert gcp["config"]["scopes"] == [
-        "https://www.googleapis.com/auth/cloud-platform"
-    ]
+    assert gcp["config"]["scopes"] == ["https://www.googleapis.com/auth/cloud-platform"]
 
 
 def test_render_gcp_auth_uses_per_secret_scopes() -> None:
@@ -1019,9 +1001,7 @@ def test_render_inject_mode_query_param_secret(
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
     secrets_block = next(t for t in cfg["transforms"] if t["name"] == "secrets")
-    assert secrets_block["config"]["secrets"][0]["inject"] == {
-        "query_param": "api_key"
-    }
+    assert secrets_block["config"]["secrets"][0]["inject"] == {"query_param": "api_key"}
 
 
 def test_render_emits_oauth_token_transform(
@@ -1042,9 +1022,9 @@ def test_render_emits_oauth_token_transform(
         "oauth_token",
         "header_allowlist",
     ]
-    tokens = next(
-        t for t in cfg["transforms"] if t["name"] == "oauth_token"
-    )["config"]["tokens"]
+    tokens = next(t for t in cfg["transforms"] if t["name"] == "oauth_token")["config"][
+        "tokens"
+    ]
     assert len(tokens) == 1
     assert tokens[0]["grant"] == "refresh_token"
     # each field resolves to its own source, with json_key for JSON secrets
@@ -1083,27 +1063,33 @@ def test_render_oauth_token_field_omits_json_key_for_whole_secret(
         )
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
-    tokens = next(
-        t for t in cfg["transforms"] if t["name"] == "oauth_token"
-    )["config"]["tokens"]
+    tokens = next(t for t in cfg["transforms"] if t["name"] == "oauth_token")["config"][
+        "tokens"
+    ]
     assert tokens[0]["client_id"] == {"type": "env", "var": "OAUTH_CLIENT_ID"}
 
 
 def test_render_oauth_token_merges_entries_by_token_identity() -> None:
     secrets = [
         OAuthTokenSecret(
-            "A", "refresh_token", ("gmail.googleapis.com",),
-            _RENDER_REFRESH_FIELDS, ("scope.a",),
+            "A",
+            "refresh_token",
+            ("gmail.googleapis.com",),
+            _RENDER_REFRESH_FIELDS,
+            ("scope.a",),
         ),
         OAuthTokenSecret(
-            "B", "refresh_token", ("drive.googleapis.com",),
-            _RENDER_REFRESH_FIELDS, ("scope.b",),
+            "B",
+            "refresh_token",
+            ("drive.googleapis.com",),
+            _RENDER_REFRESH_FIELDS,
+            ("scope.b",),
         ),
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
-    tokens = next(
-        t for t in cfg["transforms"] if t["name"] == "oauth_token"
-    )["config"]["tokens"]
+    tokens = next(t for t in cfg["transforms"] if t["name"] == "oauth_token")["config"][
+        "tokens"
+    ]
     assert len(tokens) == 1
     assert {r["host"] for r in tokens[0]["rules"]} == {
         "gmail.googleapis.com",
@@ -1115,19 +1101,25 @@ def test_render_oauth_token_merges_entries_by_token_identity() -> None:
 def test_render_oauth_token_separate_entries_for_distinct_fields() -> None:
     secrets = [
         OAuthTokenSecret(
-            "A", "refresh_token", ("gmail.googleapis.com",),
+            "A",
+            "refresh_token",
+            ("gmail.googleapis.com",),
             _RENDER_REFRESH_FIELDS,
         ),
         OAuthTokenSecret(
-            "B", "refresh_token", ("drive.googleapis.com",),
-            (("client_id", OAuthFieldSource("OTHER", "client_id")),
-             ("refresh_token", OAuthFieldSource("OTHER", "refresh_token"))),
+            "B",
+            "refresh_token",
+            ("drive.googleapis.com",),
+            (
+                ("client_id", OAuthFieldSource("OTHER", "client_id")),
+                ("refresh_token", OAuthFieldSource("OTHER", "refresh_token")),
+            ),
         ),
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
-    tokens = next(
-        t for t in cfg["transforms"] if t["name"] == "oauth_token"
-    )["config"]["tokens"]
+    tokens = next(t for t in cfg["transforms"] if t["name"] == "oauth_token")["config"][
+        "tokens"
+    ]
     assert len(tokens) == 2
 
 
@@ -1153,9 +1145,9 @@ def test_render_oauth_token_password_grant(
         )
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
-    tokens = next(
-        t for t in cfg["transforms"] if t["name"] == "oauth_token"
-    )["config"]["tokens"]
+    tokens = next(t for t in cfg["transforms"] if t["name"] == "oauth_token")["config"][
+        "tokens"
+    ]
     assert tokens[0]["grant"] == "password"
     assert tokens[0]["username"] == {"type": "env", "var": "API_USERNAME"}
     assert tokens[0]["password"] == {"type": "env", "var": "API_PASSWORD"}
@@ -1176,15 +1168,13 @@ def test_render_oauth_token_emits_token_endpoint_headers_when_set(
             hosts=("api.example.com",),
             fields=_RENDER_CC_FIELDS,
             token_endpoint="https://login.example.com/oauth2/token",
-            token_endpoint_headers=(
-                ("x-api-key", OAuthFieldSource("API_KEY")),
-            ),
+            token_endpoint_headers=(("x-api-key", OAuthFieldSource("API_KEY")),),
         )
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
-    tokens = next(
-        t for t in cfg["transforms"] if t["name"] == "oauth_token"
-    )["config"]["tokens"]
+    tokens = next(t for t in cfg["transforms"] if t["name"] == "oauth_token")["config"][
+        "tokens"
+    ]
     assert tokens[0]["token_endpoint_headers"] == {
         "x-api-key": {"type": "env", "var": "API_KEY"},
     }
@@ -1200,9 +1190,9 @@ def test_render_oauth_token_omits_token_endpoint_headers_when_empty() -> None:
         )
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
-    tokens = next(
-        t for t in cfg["transforms"] if t["name"] == "oauth_token"
-    )["config"]["tokens"]
+    tokens = next(t for t in cfg["transforms"] if t["name"] == "oauth_token")["config"][
+        "tokens"
+    ]
     assert "token_endpoint_headers" not in tokens[0]
 
 
@@ -1224,9 +1214,9 @@ def test_render_oauth_token_separate_entries_for_distinct_endpoint_headers() -> 
         ),
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
-    tokens = next(
-        t for t in cfg["transforms"] if t["name"] == "oauth_token"
-    )["config"]["tokens"]
+    tokens = next(t for t in cfg["transforms"] if t["name"] == "oauth_token")["config"][
+        "tokens"
+    ]
     assert len(tokens) == 2
 
 
@@ -1245,9 +1235,9 @@ def test_render_oauth_token_endpoint_headers_resolve_via_onepassword(
         )
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
-    tokens = next(
-        t for t in cfg["transforms"] if t["name"] == "oauth_token"
-    )["config"]["tokens"]
+    tokens = next(t for t in cfg["transforms"] if t["name"] == "oauth_token")["config"][
+        "tokens"
+    ]
     headers = tokens[0]["token_endpoint_headers"]
     assert headers["x-api-key"]["type"] == "1password"
     assert headers["x-api-key"]["secret_ref"] == "op://ai-agents/API_KEY/credential"
@@ -1264,9 +1254,9 @@ def test_render_oauth_token_emits_token_endpoint_when_set() -> None:
         )
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
-    tokens = next(
-        t for t in cfg["transforms"] if t["name"] == "oauth_token"
-    )["config"]["tokens"]
+    tokens = next(t for t in cfg["transforms"] if t["name"] == "oauth_token")["config"][
+        "tokens"
+    ]
     assert tokens[0]["token_endpoint"] == "https://login.example.com/oauth2/token"
 
 
@@ -1294,9 +1284,9 @@ def test_render_oauth_token_jwt_bearer_emits_audience_and_field_sources(
         )
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
-    tokens = next(
-        t for t in cfg["transforms"] if t["name"] == "oauth_token"
-    )["config"]["tokens"]
+    tokens = next(t for t in cfg["transforms"] if t["name"] == "oauth_token")["config"][
+        "tokens"
+    ]
     assert tokens[0]["grant"] == "jwt_bearer"
     assert tokens[0]["issuer"] == {
         "type": "env",
@@ -1328,9 +1318,9 @@ def test_render_oauth_token_omits_audience_when_unset() -> None:
         )
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
-    tokens = next(
-        t for t in cfg["transforms"] if t["name"] == "oauth_token"
-    )["config"]["tokens"]
+    tokens = next(t for t in cfg["transforms"] if t["name"] == "oauth_token")["config"][
+        "tokens"
+    ]
     assert "audience" not in tokens[0]
 
 
@@ -1352,9 +1342,9 @@ def test_render_oauth_token_separate_entries_for_distinct_audiences() -> None:
         ),
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
-    tokens = next(
-        t for t in cfg["transforms"] if t["name"] == "oauth_token"
-    )["config"]["tokens"]
+    tokens = next(t for t in cfg["transforms"] if t["name"] == "oauth_token")["config"][
+        "tokens"
+    ]
     assert len(tokens) == 2
     assert {t["audience"] for t in tokens} == {"a.example.com", "b.example.com"}
 
@@ -1427,9 +1417,7 @@ def test_render_hmac_sign_matches_iron_proxy_schema(
 
 
 def test_render_hmac_sign_emits_allow_chunked_body_when_opted_in() -> None:
-    cfg = yaml.safe_load(
-        render_proxy_yaml([_falconx_secret(allow_chunked_body=True)])
-    )
+    cfg = yaml.safe_load(render_proxy_yaml([_falconx_secret(allow_chunked_body=True)]))
     hmac = next(t for t in cfg["transforms"] if t["name"] == "hmac_sign")["config"]
     assert hmac["allow_chunked_body"] is True
 
@@ -1437,9 +1425,7 @@ def test_render_hmac_sign_emits_allow_chunked_body_when_opted_in() -> None:
 def test_render_hmac_sign_credential_supports_json_key() -> None:
     secrets = [
         _falconx_secret(
-            credentials=(
-                ("secret", OAuthFieldSource("FALCONX_BUNDLE", "hmac_key")),
-            )
+            credentials=(("secret", OAuthFieldSource("FALCONX_BUNDLE", "hmac_key")),)
         )
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
@@ -1498,7 +1484,10 @@ def test_render_emits_postgres_listeners_with_env_refs(
     ]
     cfg = yaml.safe_load(render_proxy_yaml(secrets))
     listeners = cfg["postgres"]
-    assert [listener["name"] for listener in listeners] == ["analytics_pg", "database_url"]
+    assert [listener["name"] for listener in listeners] == [
+        "analytics_pg",
+        "database_url",
+    ]
     assert listeners[0]["listen"] == "0.0.0.0:5432"
     assert listeners[1]["listen"] == "0.0.0.0:5433"
     # upstream.dsn uses the secret_ref directly so iron-proxy can resolve it
@@ -1774,7 +1763,8 @@ def test_render_brokered_and_oauth_coexist(
     assert tokens[0]["grant"] == "client_credentials"
     secrets_block = next(t for t in cfg["transforms"] if t["name"] == "secrets")
     broker_entries = [
-        e for e in secrets_block["config"]["secrets"]
+        e
+        for e in secrets_block["config"]["secrets"]
         if isinstance(e.get("source"), dict)
         and e["source"].get("type") == "token_broker"
     ]
@@ -1790,11 +1780,15 @@ def test_render_brokered_token_merges_hosts_across_duplicate_names(
     monkeypatch.setenv("FIREWALL_MANAGER_SECRET_SOURCE", "env")
     secrets = [
         BrokeredTokenSecret(
-            "claude", ("api.anthropic.com",), _BROKERED_FIELDS,
+            "claude",
+            ("api.anthropic.com",),
+            _BROKERED_FIELDS,
             token_endpoint="https://console.anthropic.com/v1/oauth/token",
         ),
         BrokeredTokenSecret(
-            "claude", ("console.anthropic.com",), _BROKERED_FIELDS,
+            "claude",
+            ("console.anthropic.com",),
+            _BROKERED_FIELDS,
             token_endpoint="https://console.anthropic.com/v1/oauth/token",
         ),
     ]

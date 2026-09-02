@@ -38,7 +38,11 @@ class _StubCtx:
 
     async def call_tool(self, tool: str, method: str, args: dict):
         self.tool_calls.append((tool, method, args))
-        return {"results": [{"path": "decisions/2026-05-25-agent-roster-lean-down-and-restructure"}]}
+        return {
+            "results": [
+                {"path": "decisions/2026-05-25-agent-roster-lean-down-and-restructure"}
+            ]
+        }
 
     async def run_agent(self, name: str, **kwargs):
         self.agent_calls.append({"name": name, **kwargs})
@@ -65,7 +69,7 @@ async def test_manager_delegation_runs_private_specialist_turns() -> None:
 
     assert ctx.tool_calls == [
         (
-            "raava_gbrain",
+            "raava_rbe",
             "search_decisions",
             {"query": "Should we ship the Raava Centaur overlay?", "limit": 5},
         )

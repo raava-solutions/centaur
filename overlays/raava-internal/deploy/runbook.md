@@ -47,12 +47,10 @@ uv run ruff check ../../overlays/raava-internal \
 cd ../..
 bun test services/slackbot/test/emulate/slack-e2e.test.ts
 docker build -t raava-centaur-overlay:local overlays/raava-internal
-docker build -t raava-gcloud-cloud-run-proxy:local \
-  -f overlays/raava-internal/deploy/gbrain-cloudrun-proxy.Dockerfile .
 ```
 
-Expected result: API overlay tests pass, Ruff passes, Slack emulator tests pass,
-and the overlay/proxy images build.
+Expected result: API overlay tests pass. Ruff passes. Slack emulator tests pass.
+The overlay image builds.
 
 ## Required Live Inputs
 
@@ -143,8 +141,7 @@ must match the tool secret name and the secret value must live in the
 | `FIRECRAWL_API_KEY` | `credential` | `firecrawl search` and `firecrawl scrape`. | Yes |
 | `ANTHROPIC_API_KEY` | `credential` | Optional Anthropic compatibility for websearch synthesis. | No |
 | `SUPERMEMORY_API_KEY` | `credential` | `supermemory recall`, `write`, and `status`. | Yes |
-| `RAAVA_GBRAIN_OAUTH` | `credential` JSON with `client_id` and `client_secret` | Hosted GCP gbrain MCP access through the proxy-minted client-credentials bearer. | Yes |
-| `RAAVA_GBRAIN_API_KEY` | `credential` | Legacy/static hosted gbrain bearer fallback. | No |
+| `RAAVA_RBE_API_KEY` | `credential` | Read-only Cloudflare RBE MCP access. | Yes |
 
 Non-secret model selection stays in deployment config, not 1Password:
 `OPENROUTER_MODEL=deepseek/deepseek-chat` and
@@ -269,95 +266,30 @@ After a sandbox is assigned, exec into the sandbox pod and run:
 ```bash
 centaur-tool-bridge tools | jq 'keys'
 centaur-tool-bridge discover supermemory | jq '.methods[].name'
-env | grep -E 'SUPERMEMORY_API_KEY|OPENROUTER_API_KEY|FIRECRAWL_API_KEY|EXA_API_KEY' && exit 1 || true
+env | grep -E 'SUPERMEMORY_API_KEY|OPENROUTER_API_KEY|FIRECRAWL_API_KEY|EXA_API_KEY|RAAVA_RBE_API_KEY' && exit 1 || true
 ```
 
 Expected result: tools are visible through the bridge and raw provider keys are
 not present in the sandbox environment.
 
-For local Kind, `RAAVA_GBRAIN_BASE_URL` points at an API-pod localhost Cloud
-Run proxy sidecar. This avoids exposing raw hosted gbrain OAuth material to the
-tool process while still querying the hosted GCP service. Create the proxy key
-Secret from the local service-account key, then patch the API deployment:
+Set `RAAVA_RBE_BASE_URL` to `https://brain.raava.dev`. Store a read-scoped RBE
+token in the `RAAVA_RBE_API_KEY` item. Iron Proxy injects the bearer only for
+`brain.raava.dev`.
 
-```bash
-kubectl -n centaur create secret generic raava-gbrain-cloudrun-proxy-key \
-  --from-file=key.json="$HOME/.config/gcloud/raava-brain-gbrain-sync-key.json" \
-  --dry-run=client -o yaml | kubectl apply -f -
-
-GBRAIN_OAUTH_JSON="$(
-  gcloud secrets versions access latest \
-    --project raava-481318 \
-    --secret raava-brain-gbrain-oauth-local-zay-agents
-)"
-patch_file="$(mktemp)"
-jq -n --arg v "$GBRAIN_OAUTH_JSON" \
-  '{stringData:{RAAVA_GBRAIN_OAUTH_JSON:$v}}' > "$patch_file"
-unset GBRAIN_OAUTH_JSON
-kubectl -n centaur patch secret centaur-infra-env --type merge \
-  --patch-file "$patch_file"
-rm "$patch_file"
-
-kubectl -n centaur patch deploy centaur-centaur-api --type strategic -p '{
-  "spec": {
-    "template": {
-      "spec": {
-        "volumes": [
-          {
-            "name": "raava-gbrain-cloudrun-proxy-key",
-            "secret": {"secretName": "raava-gbrain-cloudrun-proxy-key"}
-          }
-        ],
-        "containers": [
-          {
-            "name": "api",
-            "env": [
-              {"name": "RAAVA_GBRAIN_BASE_URL", "value": "http://127.0.0.1:8087"}
-            ]
-          },
-          {
-            "name": "gbrain-cloudrun-proxy",
-            "image": "raava-gcloud-cloud-run-proxy:local",
-            "imagePullPolicy": "IfNotPresent",
-            "command": ["/usr/bin/cloud-run-proxy"],
-            "args": [
-              "-host",
-              "raava-brain-gbrain-lmbn6fkciq-ue.a.run.app",
-              "-bind",
-              "127.0.0.1:8087"
-            ],
-            "env": [
-              {"name": "GOOGLE_APPLICATION_CREDENTIALS", "value": "/var/secrets/google/key.json"}
-            ],
-            "volumeMounts": [
-              {"name": "raava-gbrain-cloudrun-proxy-key", "mountPath": "/var/secrets/google", "readOnly": true}
-            ]
-          }
-        ]
-      }
-    }
-  }
-}'
-```
-
-Direct-hosted deployments can instead set `RAAVA_GBRAIN_BASE_URL` to
-`https://raava-brain-gbrain-lmbn6fkciq-ue.a.run.app` when the
-`RAAVA_GBRAIN_OAUTH` item is available to iron-proxy. Verify hosted gbrain
-grounding:
+Verify RBE grounding:
 
 ```bash
 kubectl -n centaur exec deploy/centaur-centaur-api -- sh -lc '
   curl -sS -X POST \
     -H "Authorization: Bearer ${LOCAL_DEV_API_KEY}" \
     -H "Content-Type: application/json" \
-    http://localhost:8000/tools/raava_gbrain/search_decisions \
+    http://localhost:8000/tools/raava_rbe/search_decisions \
     -d "{\"query\":\"active Raava function leads\",\"limit\":3}" | jq
 '
 ```
 
-Expected result: hosted responses show `source: hosted-gbrain`. If hosted
-gbrain is unavailable or OAuth is not configured, the result should clearly show
-the local-baseline source rather than inventing unsupported facts.
+Expected result: live responses show `source: rbe`. If RBE or its token is
+unavailable, the tool shows `source: local-baseline`.
 
 ## Local Kind Bootstrap
 

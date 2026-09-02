@@ -4,7 +4,7 @@ Inserts paths on sys.path so that under pytest:
   - ``import centaur_sdk`` resolves (repo root)
   - ``from raava_outreach.client import ...`` resolves (overlay tools dir)
   - ``from raava_supermemory.client import ...`` resolves (overlay tools dir)
-  - ``from raava_gbrain.client import ...`` resolves (overlay tools dir)
+  - ``from raava_rbe.client import ...`` resolves (overlay tools dir)
 """
 
 import sys

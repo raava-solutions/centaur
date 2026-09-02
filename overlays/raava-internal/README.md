@@ -7,7 +7,7 @@ This overlay packages Raava's internal Centaur product surface:
 - private specialist routing for Hana, Isaac, demoted roles, and decomposed
   execution roles
 - Raava Slack channel defaults
-- a gbrain grounding tool with deterministic local fallback
+- a Cloudflare RBE grounding tool with deterministic local fallback
 - a manager delegation workflow that can run without Slack
 
 The overlay is kept under `overlays/raava-internal` for local dogfood. It uses
@@ -37,7 +37,7 @@ instead.
 
 Base Centaur behavior lives under paths such as `services/api/`,
 `services/slackbot/`, and `services/sandbox/`. Raava behavior lives in this
-overlay under `overlays/raava-internal/`: personas, the gbrain wrapper, Slack
+overlay under `overlays/raava-internal/`: personas, the RBE wrapper, Slack
 routing, manager delegation, sandbox prompt guidance, and Raava skills.
 
 The boundary is resolved at runtime. When `TOOL_DIRS` and `WORKFLOW_DIRS`
@@ -66,9 +66,8 @@ uv run pytest \
   tests/test_raava_internal_delegation.py
 ```
 
-The tests do not require Slack credentials or hosted gbrain access. The
-`raava_gbrain` tool falls back to the local roster baseline when
-`RAAVA_GBRAIN_BASE_URL` is unset.
+The tests do not require Slack credentials or live RBE access. Set
+`RAAVA_RBE_BASE_URL` to an empty string to test the local roster fallback.
 
 ## Docker overlay image
 
@@ -149,8 +148,8 @@ Slackbot is reachable by Slack.
 6. Mention a private specialist selector such as `--hana` and verify the final
    Slack answer is owned by Enoch.
 
-The Slack smoke should validate routing and UX only. Workflow delegation and
-gbrain fallback are covered by API tests and direct workflow smoke.
+The Slack smoke validates routing and UX only. API tests and the direct workflow
+smoke cover the RBE fallback.
 
 ---
 

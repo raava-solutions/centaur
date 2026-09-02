@@ -72,14 +72,10 @@ api:
   # Route API-hosted tools through the egress proxy so they get credential injection.
   firewallProxy:
     enabled: true
-  # Direct-hosted gbrain grounding: override the local-dev sidecar URL
-  # (127.0.0.1:8087 in values.raava-local.yaml, which does not exist on Proxmox)
-  # with the hosted Cloud Run service. The api iron-proxy mints + injects the
-  # bearer via the RAAVA_GBRAIN_OAUTH client_credentials transform, so no token
-  # is set here. Until that 1Password item exists the tool falls back to its
-  # local roster baseline (no regression vs the dead local URL).
+  # Cloudflare RBE is the company knowledge read surface. Iron Proxy injects
+  # the host-scoped RAAVA_RBE_API_KEY bearer.
   extraEnv:
-    RAAVA_GBRAIN_BASE_URL: "https://raava-brain-gbrain-lmbn6fkciq-ue.a.run.app"
+    RAAVA_RBE_BASE_URL: "https://brain.raava.dev"
   # Egress discovery needs a centaur-egress namespace + tailnet FQDN annotations
   # that are not provisioned here; keep it off (matches values.dev.yaml) so the
   # file is correct even if layered without values.dev.yaml.

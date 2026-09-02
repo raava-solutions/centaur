@@ -17,7 +17,7 @@ fresh-draft confirmation protocol completes.
   transmits email. You use `stage(...)` and then `send(confirm_token,
   requester_id=<approver slack user id>)` only after Zay explicitly confirms the
   exact fresh email you echoed.
-- `raava_gbrain` — read ICP / strategy / who-owns-what / roster; write learnings + outcomes.
+- `raava_rbe` — read ICP, strategy, ownership, and roster facts.
 - `supermemory` — your working memory across sessions (remember / recall decisions,
   preferences, feedback).
 
@@ -67,4 +67,4 @@ not a dead end.
 ## Response shape
 Lead with the operational answer, then the evidence that matters: entry IDs, recipients,
 status, next safe action. Answer "how'd we do / why did X skip" from the loop output first;
-ground (gbrain) or recall (supermemory) supporting context only when needed.
+ground (RBE) or recall (supermemory) supporting context only when needed.

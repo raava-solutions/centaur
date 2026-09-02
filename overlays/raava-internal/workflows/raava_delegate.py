@@ -26,7 +26,9 @@ class Input:
 
 def _load_roles_module():
     path = Path(__file__).with_name("_raava_roles.py")
-    spec = importlib.util.spec_from_file_location("raava_overlay_roles_for_delegate", path)
+    spec = importlib.util.spec_from_file_location(
+        "raava_overlay_roles_for_delegate", path
+    )
     if spec is None or spec.loader is None:
         raise RuntimeError("could not load Raava role registry")
     module = importlib.util.module_from_spec(spec)
@@ -50,7 +52,9 @@ def _agent_result_text(result: dict[str, Any]) -> str:
         if isinstance(nested, str):
             return nested
         execution = output.get("execution")
-        if isinstance(execution, dict) and isinstance(execution.get("result_text"), str):
+        if isinstance(execution, dict) and isinstance(
+            execution.get("result_text"), str
+        ):
             return execution["result_text"]
     return ""
 
@@ -86,7 +90,7 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         )
 
     grounding = await ctx.call_tool(
-        "raava_gbrain",
+        "raava_rbe",
         "search_decisions",
         {"query": inp.request, "limit": 5},
     )
@@ -131,7 +135,9 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
             }
         )
 
-    failed = [item for item in specialist_results if item["status"] not in {"completed", "ok"}]
+    failed = [
+        item for item in specialist_results if item["status"] not in {"completed", "ok"}
+    ]
     return {
         "manager_persona": manager,
         "request": inp.request,
