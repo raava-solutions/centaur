@@ -1,0 +1,46 @@
+version = 1
+
+[project]
+name = "centaur"
+# The lifecycle hook runs from the main worktree (feat/rust-hermes-mem0);
+# base against that branch so the hook measures nothing there. Real gates for
+# the rust-cutover branch run explicitly with --base/--head in the cutover
+# worktree.
+base_ref = "feat/rust-hermes-mem0"
+languages = ["rust", "typescript", "python"]
+framework = "helm-chart"
+
+[scope]
+excluded_paths = ["**/*.test.*", "**/*.spec.*", "generated/**", ".engineering/**"]
+
+# Fast checks only run commands this repository already supports.
+# ENGINEERING_CHANGED_FILES (newline-delimited) and ENGINEERING_CHANGED_FILE_COUNT
+# are provided to each command.
+
+[[checks]]
+id = "helm-lint"
+phase = "fast"
+severity = "fail"
+# Validates the chart plus values files that changed.
+command = """
+bash -c '
+changed=$(printf "%s\\n" "$ENGINEERING_CHANGED_FILES" | grep -E "^(contrib/chart|overlays/raava-internal/deploy)/.*\\.ya?ml$" || true)
+if [ -z "$changed" ]; then exit 0; fi
+export HELM_CACHE_HOME=/tmp/helm-cache HELM_CONFIG_HOME=/tmp/helm-config
+helm dependency build contrib/chart >/dev/null 2>&1 || true
+helm lint contrib/chart -f contrib/chart/values.yaml \
+  -f overlays/raava-internal/deploy/values.raava-proxmox.yaml >/dev/null
+'
+"""
+
+[[checks]]
+id = "overlay-python-syntax"
+phase = "fast"
+severity = "fail"
+command = """
+bash -c '
+files=$(printf "%s\\n" "$ENGINEERING_CHANGED_FILES" | grep -E "\\.py$" | grep overlays || true)
+[ -z "$files" ] && exit 0
+python3 -m py_compile $files
+'
+"""

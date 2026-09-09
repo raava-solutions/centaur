@@ -1,0 +1,158 @@
+# Raava production values — Centaur Rust control plane on the Proxmox k3s VM
+# (centaur-k3s / VM 110, Proxmox node pve-03).
+#
+# Base: upstream paradigmxyz/centaur main (chart 0.1.139) + the Raava overlay
+# carried in this repo (overlays/raava-internal). Layers on top of the chart
+# defaults:
+#
+#   helm upgrade --install centaur contrib/chart -n centaur \
+#     -f contrib/chart/values.yaml \
+#     -f overlays/raava-internal/deploy/values.raava-proxmox.yaml \
+#     --set-file overlay.systemPrompt=overlays/raava-internal/services/sandbox/SYSTEM_PROMPT.md
+#
+# Images are side-loaded into k3s containerd with pinned tags (registry "" =
+# bare names). See deploy/RELEASE.md for the release flow. The pre-Rust keys
+# (`api:`, `slackbot:`, `tokenBroker:`, `overlay.image`) do not exist on this
+# chart and must not be reintroduced.
+
+x-release: &release
+  registry: "" # empty = bare names, i.e. side-loaded k3s containerd images
+  tag: "PENDING_BUILD_TAG"
+  pullPolicy: IfNotPresent
+
+# --- Secret backend: 1Password Connect (writable token on Engineering) ----------
+# The broker-credential OAuth refresh loop needs write scope on the vault.
+ironProxy:
+  secretSource: onepassword-connect
+  secretTtl: 10m
+  image:
+    repository: centaur-iron-proxy
+    <<: *release
+
+# Stands up the in-cluster Connect API+sync pods. Gated on BOTH this flag and
+# ironProxy.secretSource == "onepassword-connect". The credentials Secret
+# already exists on the cluster (centaur-onepassword-connect-credentials).
+onepasswordConnect:
+  connect:
+    create: true
+    credentialsName: centaur-onepassword-connect-credentials
+    credentialsKey: 1password-credentials.json
+    serviceType: ClusterIP
+
+secretManager:
+  existingSecretName: centaur-infra-env
+  envPrefix: ""
+
+# Repo-cache clones sources for the overlay delivery below. The Raava fork is
+# private, so the cache needs a GitHub token: a fine-grained, read-only PAT on
+# raava-solutions/centaur stored as GITHUB_TOKEN in centaur-infra-env.
+repoCache:
+  githubToken:
+    existingSecretName: centaur-infra-env
+    secretKey: GITHUB_TOKEN
+
+# --- Overlay delivery ------------------------------------------------------------
+# Source 1: the base repo (tools, workflows, skills). Source 2: the Raava
+# overlay — personas, tools, skills, workflows. Later sources shadow earlier
+# ones on directory-name collision, so Raava wins over base.
+overlays:
+  sources:
+    - repo: paradigmxyz/centaur
+      ref: "PENDING_BASE_SHA"
+      visibility: public
+    - repo: raava-solutions/centaur
+      ref: "PENDING_CUTOVER_SHA"
+      toolsSubdir: overlays/raava-internal/tools
+      skillsSubdir: overlays/raava-internal/.agents/skills
+      workflowsSubdir: overlays/raava-internal/workflows
+
+# Raava sandbox system prompt, rendered into a ConfigMap for api-rs. Populate
+# with --set-file so this file never drifts from the source.
+overlay:
+  mountPath: /app/overlay/org
+  systemPrompt: ""
+
+# --- Control plane --------------------------------------------------------------
+apiRs:
+  enabled: true
+  image:
+    repository: centaur-api-rs
+    <<: *release
+  runMigrations: true
+  syncInfraSecrets: true
+  # Sized for the 8 GiB / 2 vCPU VM shared with console + postgres. Raise the
+  # warm pool only after observing steady-state memory with console running.
+  sandboxWarmPoolSize: 1
+  extraEnv:
+    CENTAUR_DEFAULT_PERSONA: chief
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 1536Mi
+
+slackbotv2:
+  enabled: true
+  image:
+    repository: centaur-slackbotv2
+    <<: *release
+  userName: centaur
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 384Mi
+
+# --- Sandboxes ------------------------------------------------------------------
+sandbox:
+  controller: pod # api-rs creates plain pods; the standalone agent-sandbox
+  # controller in agent-sandbox-system stays installed but unused.
+  image:
+    repository: centaur-agent
+    <<: *release
+  # codex | amp | claudecode. Must agree with the agent image's default CMD
+  # and with the iron-proxy auth fragment api-rs registers.
+  harnessEngine: codex
+  codexAuthMode: access_token
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+
+# --- Console (iron-control) ------------------------------------------------------
+# Required chart component on the Rust stack. Runs with a FRESH
+# iron_control_production database created by its init container; api-rs
+# (syncInfraSecrets=true) upserts the infra role and tool secrets at startup.
+# The Codex OAuth broker credential must be re-seeded post-cutover — see the
+# rust-cutover runbook.
+console:
+  image:
+    repository: centaur-console
+    tag: "PENDING_BUILD_TAG"
+    pullPolicy: IfNotPresent
+
+# --- State ----------------------------------------------------------------------
+postgres:
+  image:
+    pullPolicy: IfNotPresent
+  persistence:
+    enabled: true
+    size: 20Gi
+    storageClassName: local-path # must match the live PVC so the claim is reused
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+
+# --- Cluster fit ----------------------------------------------------------------
+# The agent-sandbox controller is installed standalone (Phase A, namespace
+# agent-sandbox-system, cluster-scoped); keep the chart copy off to avoid a
+# duplicate controller and a CRD-ownership conflict.
+agentSandbox:
+  enabled: false

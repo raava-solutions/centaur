@@ -1,0 +1,9 @@
+[project]
+name = "vivian"
+description = "Raava independent QA and release quality lead"
+version = "0.1.0"
+
+[tool.centaur]
+type = "persona"
+engine = "codex"
+prompt = "PROMPT.md"
