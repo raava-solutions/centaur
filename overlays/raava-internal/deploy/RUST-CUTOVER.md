@@ -88,4 +88,14 @@ section. Do not start the cutover until the pre-flight checks below pass.
 
 ## Cutover log
 
-- (fill in during execution: dates, revisions, tags, outcomes)
+- 2026-09-09/10 (prep): branch `feat/rust-production-cutover` pushed to the
+  raava fork (port 09f6d727, profile 037873b6, sandbox skills fix 48930633,
+  values pin b605ef84). All 5 images built on the VM and imported into k3s
+  containerd, tag `0.1.139-48930633`. `ai_v3` created. DB dump + helm
+  values/history + cloudflared manifests saved under `/root/backups/`.
+  Rollback script staged at `/root/rollback.sh` (helm rollback to rev 16,
+  restore `DATABASE_URL` → `ai_v2`, restore cloudflared, delete Rust-only
+  workloads). Apply script staged at `/root/cutover-apply.sh`.
+  Blocker before apply: `GITHUB_TOKEN` (fine-grained read-only PAT on
+  `raava-solutions/centaur`) must be added to `centaur-infra-env`.
+- (fill in during execution: apply time, revisions, outcomes)
