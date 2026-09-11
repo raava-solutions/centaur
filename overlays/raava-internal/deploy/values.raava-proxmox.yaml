@@ -17,7 +17,7 @@
 
 x-release: &release
   registry: "" # empty = bare names, i.e. side-loaded k3s containerd images
-  tag: "PENDING_BUILD_TAG"
+  tag: "0.1.139-48930633"
   pullPolicy: IfNotPresent
 
 # --- Secret backend: 1Password Connect (writable token on Engineering) ----------
@@ -58,10 +58,10 @@ repoCache:
 overlays:
   sources:
     - repo: paradigmxyz/centaur
-      ref: "PENDING_BASE_SHA"
+      ref: "93c43ed8a59d1a06b2626bd1f4a2c6324dd276a8"
       visibility: public
     - repo: raava-solutions/centaur
-      ref: "PENDING_CUTOVER_SHA"
+      ref: "48930633"
       toolsSubdir: overlays/raava-internal/tools
       skillsSubdir: overlays/raava-internal/.agents/skills
       workflowsSubdir: overlays/raava-internal/workflows
@@ -132,7 +132,7 @@ sandbox:
 console:
   image:
     repository: centaur-console
-    tag: "PENDING_BUILD_TAG"
+    tag: "0.1.139-48930633"
     pullPolicy: IfNotPresent
 
 # --- State ----------------------------------------------------------------------
