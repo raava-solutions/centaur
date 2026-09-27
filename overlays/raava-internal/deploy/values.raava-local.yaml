@@ -1,0 +1,174 @@
+# Raava local dogfood values — a developer cluster (Kind, Docker Desktop, k3d).
+#
+# Layer on top of the chart defaults:
+#   helm upgrade --install centaur contrib/chart -n centaur \
+#     -f contrib/chart/values.yaml \
+#     -f overlays/raava-internal/deploy/values.raava-local.yaml
+#
+# WARNING: `just deploy` does not read this file. It applies
+# contrib/chart/values.dev.yaml plus $CENTAUR_EXTRA_VALUES only, so a plain
+# `just deploy` silently drops every Raava setting below. Pass the file:
+#   CENTAUR_EXTRA_VALUES=overlays/raava-internal/deploy/values.raava-local.yaml just deploy
+#
+# This file targets the CURRENT chart shape: api-rs (Rust control plane) +
+# slackbotv2 + agent-sandbox CRDs. Images come from `just build` and are loaded
+# into the local cluster, so every tag stays `latest` and every pullPolicy is
+# IfNotPresent.
+#
+# WARNING: contrib/chart/values.schema.json sets no "additionalProperties":
+# false, so Helm ignores an unknown key and applies the chart default instead.
+# A stale key here is worse than a missing one: the file claims a setting the
+# cluster never receives. Check every key against contrib/chart/values.yaml and
+# contrib/chart/templates/ before you add it. The pre-Rust keys (`api:`,
+# `slackbot:`, `tokenBroker:`, `overlay.image`, `sandbox.codexAuth`,
+# `ironProxy.manager`) no longer exist and must not come back.
+x-release: &release
+  registry: "" # empty = bare names, i.e. images the cluster loaded locally
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+# --- Secret backend: Kubernetes Secret ----------------------------------------
+# Local dogfood resolves credentials from the centaur-infra-env Secret, so no
+# 1Password Connect pods run here. contrib/scripts/bootstrap-k8s-secrets.sh
+# writes that Secret from your shell environment. secretManager needs no entry:
+# the chart defaults already select centaur-infra-env with an empty envPrefix.
+# Layer values.raava-local-connect.yaml to reproduce the production Connect path.
+#
+# `env` is the only accepted spelling for this mode. The old value
+# `environment` is not a known source: api-rs rejects
+# FIREWALL_MANAGER_SECRET_SOURCE at startup instead of falling back.
+ironProxy:
+  secretSource: env
+  image:
+    repository: centaur-iron-proxy
+    <<: *release
+
+# --- Sandboxes ----------------------------------------------------------------
+# Tools and workflows run inside the sandbox pod, not inside api-rs. Every tool
+# and workflow setting therefore belongs under sandbox.extraEnv, and setting it
+# on apiRs.extraEnv has no effect on them.
+sandbox:
+  image:
+    repository: centaur-agent
+    <<: *release
+  # codex | amp | claudecode. Must agree with the agent image's default CMD and
+  # with the iron-proxy auth fragment api-rs registers.
+  # Hermes is parked: the Rust control plane has no Hermes harness, so local
+  # dogfood runs Codex. See the gap list at the bottom of this file.
+  harnessEngine: codex
+  # ChatGPT OAuth instead of a raw API key. This replaces the old
+  # sandbox.codexAuth Secret mount, which the chart never supported: api-rs does
+  # not mount Secrets into sandboxes. iron-token-broker mints short-lived access
+  # tokens and iron-proxy injects them, so the sandbox still never holds the
+  # credential. This mode needs three items in centaur-infra-env:
+  # OPENAI_CODEX_CLIENT_ID, OPENAI_CODEX_BLOB (writable — the broker rotates it)
+  # and OPENAI_CODEX_ACCOUNT_ID. See "Codex Auth Modes" in
+  # docs/pages/deploying-in-production.mdx, including the warning not to use
+  # this ChatGPT account for Codex outside Centaur.
+  codexAuthMode: access_token
+  extraEnv:
+    # Hosted gbrain grounding for the raava_gbrain tool. The pre-Rust local
+    # profile pointed this at http://127.0.0.1:8087, a cloud-run-proxy sidecar
+    # patched onto the API pod where tools ran in-process. That no longer works:
+    # a sandbox pod cannot reach the api-rs pod's loopback. Use the public Cloud
+    # Run URL, or run the proxy as its own Deployment + Service and point this
+    # at its cluster DNS name.
+    RAAVA_GBRAIN_BASE_URL: "https://raava-brain-gbrain-lmbn6fkciq-ue.a.run.app"
+    # Channel routing table for the Raava role workflows in
+    # overlays/raava-internal/workflows/_raava_roles.py. "{}" routes no role to
+    # any channel. Set real Slack channel IDs for the deployment.
+    RAAVA_CENTAUR_CHANNEL_DEFAULTS: "{}"
+
+# --- Control plane ------------------------------------------------------------
+apiRs:
+  enabled: true
+  image:
+    repository: centaur-api-rs
+    <<: *release
+  # Kind and Docker Desktop take longer to create a sandbox pod: the agent image
+  # is large and unpacks on first use. The chart default of 90 s times out
+  # during that unpack and the turn fails before the harness starts.
+  sandboxReadyTimeoutSecs: 180
+  # Per-sandbox iron-proxy, created by api-rs. Do not copy the old local intent
+  # of api.firewallProxy.enabled=false here: that key meant "no proxy sidecar
+  # beside the API". api-rs now injects every credential through the per-sandbox
+  # proxy, so mode `disabled` leaves the harness and the tools with placeholders
+  # and no way to resolve them.
+  ironProxy:
+    mode: enabled
+
+# --- Slack ---------------------------------------------------------------
+# The old slackbot block disabled a proxy and set RUNTIME_ERROR_ALERT_CHANNEL.
+# The chart puts no proxy in front of the Slackbot, and slackbotv2 reads no
+# alert-channel variable, so neither setting has a target any more.
+slackbotv2:
+  enabled: true
+  image:
+    repository: centaur-slackbotv2
+    <<: *release
+
+# --- Tools + overlay delivery -------------------------------------------------
+# Upstream's supported overlay mechanism: repo-cache clones each source and the
+# tools-bootstrap init container copies `subdir` into every sandbox at /app/tools.
+# Later sources shadow earlier ones on directory-name collision, so the Raava
+# overlay wins over base tools without forking them.
+#
+# WARNING: the clone comes from GitHub, not from your working tree. Uncommitted
+# or unpushed tool changes never reach a sandbox. Push your branch to
+# raava-solutions/centaur and set `ref` to it while you test tools.
+toolServer:
+  enabled: true
+  repo: raava-solutions/centaur
+  ref: "" # set to your branch to test unmerged tools; pin to the release tag otherwise
+  subdir: tools
+  extraSources:
+    - repo: raava-solutions/centaur
+      ref: ""
+      subdir: overlays/raava-internal/tools
+
+# Raava sandbox system prompt. The chart renders this into a ConfigMap and sets
+# CENTAUR_OVERLAY_DIR on api-rs only -- no template mounts it into a sandbox pod,
+# so this value is inert today. See deploy/READINESS.md (sandbox prompt and skills).
+# Populate it with --set-file so this file never drifts from the source:
+#   --set-file overlay.systemPrompt=overlays/raava-internal/services/sandbox/SYSTEM_PROMPT.md
+#
+# WARNING: overlay.mountPath only reaches anywhere when systemPrompt is non-empty.
+# templates/apirs.yaml emits CENTAUR_OVERLAY_DIR inside an
+# `if .Values.overlay.systemPrompt` guard, so mountPath alone does nothing.
+overlay:
+  mountPath: /app/overlay/org
+  systemPrompt: ""
+
+# --- Not expressible as chart values today --------------------------------------
+# Gaps carried forward from the pre-Rust local profile. Each needs a chart or
+# api-rs change; none blocks development on this branch.
+#   1. Hermes harness. Retired with the Python control plane: no Hermes string
+#      exists in services/api-rs. Re-adding it means a new sandbox.harnessEngine
+#      value plus an iron-proxy auth fragment, and a wrapper in
+#      services/sandbox/Dockerfile. Parked as its own ticket.
+#   2. Overlay image. `overlay.image` (a container that carried the whole
+#      overlay tree into the API and the sandbox) is gone, and
+#      docs/pages/extend/overlay.mdx still documents it. tools/ ships through
+#      toolServer.extraSources above; skills and personas from
+#      overlays/raava-internal/.agents have no delivery path until the chart
+#      mounts an overlay tree again.
+#   3. Overlay workflows. WORKFLOW_DIRS is built as <repo-cache>/<repo>/workflows
+#      and ignores toolServer.extraSources[].subdir, so
+#      overlays/raava-internal/workflows is not discovered. Upstream fix: honour
+#      subdir when composing WORKFLOW_DIRS.
+#   4. Static local admin key. LOCAL_DEV_API_KEY is documented in
+#      docs/pages/reference/configuration.mdx but no code in services/api-rs
+#      reads it. Mint a DB-backed key through the admin path instead.
+#   5. Model-choice defaults. WEBSEARCH_SYNTHESIS_PROVIDER and OPENROUTER_MODEL
+#      were local Raava defaults. No code in this repo reads either name, so they
+#      are dropped rather than carried as inert environment.
+#   6. Runtime error alert channel. RUNTIME_ERROR_ALERT_CHANNEL had a Python
+#      Slackbot consumer. services/slackbotv2 reads no such variable.
+#   7. iron-token-broker. The single-writer Codex OAuth refresher was a Raava
+#      chart template; it is not upstream. Re-add as an overlay template or move
+#      the refresh loop into api-rs. access_token mode depends on this.
+#   8. gbrain Cloud Run proxy sidecar. The chart cannot add a sidecar to the
+#      api-rs pod, and a sandbox cannot reach one if it could. Use the public
+#      Cloud Run URL, or ship the proxy as its own Service.
+#   9. cloudflared. Applied as the standalone cloudflared-centaur.yaml manifest,
+#      never as a chart value. Needs the centaur-cloudflared-credentials secret.

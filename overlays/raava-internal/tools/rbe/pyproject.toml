@@ -1,0 +1,17 @@
+[project]
+name = "rbe"
+description = "Raava Brain Engine (RBE) — query, search, pages, facts, backlinks, and timelines from the company knowledge base"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["httpx>=0.28.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.centaur]
+module = "client.py"
+hosts = ["brain.raava.dev"]
+secrets = [
+    {type = "http", name = "RBE_API_TOKEN", match_headers = ["Authorization"], hosts = ["brain.raava.dev"]},
+]

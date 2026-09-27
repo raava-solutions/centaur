@@ -1,0 +1,42 @@
+{
+  "display_information": {
+    "name": "Centaur",
+    "description": "Raava internal Centaur assistant for Slack workflow execution.",
+    "background_color": "#35302c"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "Centaur",
+      "always_online": true
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "chat:write",
+        "channels:history",
+        "channels:read",
+        "groups:history",
+        "groups:read",
+        "reactions:read",
+        "reactions:write",
+        "users:read"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "request_url": "https://centaur.raava.dev/api/webhooks/slack",
+      "bot_events": [
+        "app_mention",
+        "message.channels",
+        "message.groups",
+        "reaction_added"
+      ]
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}

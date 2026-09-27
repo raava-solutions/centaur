@@ -1,0 +1,9 @@
+[project]
+name = "priya"
+description = "Raava product strategy and requirements lead"
+version = "0.1.0"
+
+[tool.centaur]
+type = "persona"
+engine = "codex"
+prompt = "PROMPT.md"

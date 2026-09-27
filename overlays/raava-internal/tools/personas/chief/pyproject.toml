@@ -1,0 +1,9 @@
+[project]
+name = "chief"
+description = "Raava executive synthesis and cross-functional routing lead"
+version = "0.1.0"
+
+[tool.centaur]
+type = "persona"
+engine = "codex"
+prompt = "PROMPT.md"
