@@ -87,6 +87,12 @@ pub struct IronProxyConfig {
     pub env_from_secret_names: Vec<String>,
     pub extra_env: BTreeMap<String, String>,
     pub upstream_deny_cidrs: Vec<String>,
+    /// Operator-scoped upstream allowlist: extra CIDRs the per-sandbox
+    /// iron-proxy may reach on the upstream ports (443/5432), on top of the
+    /// default public-only peer. Used for infrastructure endpoints that
+    /// live on private networks (for example a tailnet service mesh) whose
+    /// traffic still must transit the proxy.
+    pub upstream_allow_cidrs: Vec<String>,
     pub op_connect_app_name: String,
     pub op_connect_port: u16,
     pub api_pod_labels: BTreeMap<String, String>,
@@ -110,6 +116,7 @@ impl IronProxyConfig {
             env_from_secret_names: Vec::new(),
             extra_env: BTreeMap::new(),
             upstream_deny_cidrs: Vec::new(),
+            upstream_allow_cidrs: Vec::new(),
             op_connect_app_name: "onepassword-connect".to_owned(),
             op_connect_port: 8080,
             api_pod_labels: BTreeMap::from([(
@@ -1765,6 +1772,27 @@ fn proxy_egress_rules(
         vec![network_port(PG_LISTENER_PORT)],
     ));
     rules.push(egress_to(vec![public_ipv4_peer()], upstream_ports));
+    // Operator-scoped upstream allowlist: extra CIDRs reachable on the same
+    // upstream ports, on top of the public-only peer above. Empty by default;
+    // populated for private infrastructure endpoints (for example tailnet
+    // service hosts) that still must transit the proxy.
+    if !iron_proxy.upstream_allow_cidrs.is_empty() {
+        let allow_peers = iron_proxy
+            .upstream_allow_cidrs
+            .iter()
+            .map(|cidr| NetworkPolicyPeer {
+                ip_block: Some(IPBlock {
+                    cidr: cidr.clone(),
+                    except: None,
+                }),
+                ..Default::default()
+            })
+            .collect();
+        rules.push(egress_to(
+            allow_peers,
+            vec![network_port(443), network_port(5432)],
+        ));
+    }
     if observability_enabled {
         rules.push(egress_to(
             vec![pod_peer(iron_proxy.api_pod_labels.clone())],
