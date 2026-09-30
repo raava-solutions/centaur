@@ -1784,6 +1784,16 @@ struct IronProxyArgs {
         value_delimiter = ','
     )]
     upstream_deny_cidrs: Vec<String>,
+    /// Operator-scoped upstream allowlist: extra CIDRs the per-sandbox
+    /// iron-proxy may reach on the upstream ports (443/5432), on top of the
+    /// default public-only peer. For private infrastructure endpoints (for
+    /// example tailnet service hosts) that still must transit the proxy.
+    #[arg(
+        long = "kubernetes-iron-proxy-upstream-allow-cidrs",
+        env = "KUBERNETES_IRON_PROXY_UPSTREAM_ALLOW_CIDRS",
+        value_delimiter = ','
+    )]
+    upstream_allow_cidrs: Vec<String>,
     /// Per-sandbox iron-proxy container resources as a JSON Kubernetes
     /// `ResourceRequirements` object.
     #[arg(
@@ -1825,6 +1835,12 @@ impl IronProxyArgs {
         )?;
         config.upstream_deny_cidrs = self
             .upstream_deny_cidrs
+            .iter()
+            .filter_map(|cidr| non_empty(Some(cidr.as_str())))
+            .map(ToOwned::to_owned)
+            .collect();
+        config.upstream_allow_cidrs = self
+            .upstream_allow_cidrs
             .iter()
             .filter_map(|cidr| non_empty(Some(cidr.as_str())))
             .map(ToOwned::to_owned)
@@ -3256,6 +3272,28 @@ mod tests {
                 "10.42.0.0/16".to_owned(),
                 "10.43.0.0/16".to_owned(),
             ]
+        );
+    }
+
+    #[test]
+    fn iron_proxy_upstream_allow_cidrs_are_parsed() {
+        let args = Args::try_parse_from([
+            "centaur-api-server",
+            "--database-url",
+            "postgres://postgres:postgres@localhost/centaur",
+            "--kubernetes-firewall-ca-secret-name",
+            "centaur-firewall-ca",
+            "--kubernetes-firewall-ca-key-secret-name",
+            "centaur-firewall-ca-key",
+            "--kubernetes-iron-proxy-upstream-allow-cidrs",
+            "100.64.0.0/10,192.168.100.0/24",
+        ])
+        .unwrap();
+
+        let config = args.sandbox.iron_proxy.to_config().unwrap();
+        assert_eq!(
+            config.upstream_allow_cidrs,
+            vec!["100.64.0.0/10".to_owned(), "192.168.100.0/24".to_owned()]
         );
     }
 

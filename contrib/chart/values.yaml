@@ -39,6 +39,12 @@ ironProxy:
     - "::1/128"
     - "10.42.0.0/16"
     - "10.43.0.0/16"
+  # Operator-scoped upstream allowlist: extra CIDRs each per-sandbox
+  # iron-proxy may dial on the upstream ports (443/5432) in addition to the
+  # default public-only peer. Empty by default. Set this for infrastructure
+  # endpoints that live on private networks (for example tailnet service
+  # hosts) whose traffic still must transit the proxy.
+  upstreamAllowCidrs: []
   secretSource: onepassword
   secretTtl: 10m
   # Requests/limits for each per-sandbox iron-proxy pod (k8s resources map).
