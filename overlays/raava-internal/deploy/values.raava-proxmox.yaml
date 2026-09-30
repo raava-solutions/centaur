@@ -25,6 +25,12 @@ x-release: &release
 ironProxy:
   secretSource: onepassword-connect
   secretTtl: 10m
+  # Upstream allowlist so per-sandbox iron-proxy pods may dial pve-03's
+  # tailnet address (Proxmox API) on the upstream ports. Requires the chart
+  # support from PR raava-solutions/centaur#5 (fix/iron-proxy-upstream-allow-cidrs);
+  # until that merges into this branch the key is inert.
+  upstreamAllowCidrs:
+    - 100.96.27.92/32
   image:
     repository: centaur-iron-proxy
     <<: *release
@@ -57,11 +63,17 @@ repoCache:
 # ones on directory-name collision, so Raava wins over base.
 overlays:
   sources:
+    # Base repo tools/workflows/skills. Pinned to a real upstream commit —
+    # the previous pin (93c43ed8…) never existed upstream and repo-cache's
+    # fetch failed with GitHub 422. Matches live repo-cache REPOSITORY_REFS.
     - repo: paradigmxyz/centaur
-      ref: "93c43ed8a59d1a06b2626bd1f4a2c6324dd276a8"
+      ref: "abe1d95e8289d362364a31677b01623611927144"
       visibility: public
+    # Raava overlay pinned to fork main (7055b395). Also matches the live
+    # api-rs KUBERNETES_TOOLS_EXTRA_SOURCES pin. Bump this after PR
+    # raava-solutions/centaur#4 (fix/rbe-tool-script) merges to main.
     - repo: raava-solutions/centaur
-      ref: "48930633"
+      ref: "7055b395bd3fcc4800ba5e611fe5ec1b1a7bf9fc"
       toolsSubdir: overlays/raava-internal/tools
       skillsSubdir: overlays/raava-internal/.agents/skills
       workflowsSubdir: overlays/raava-internal/workflows
@@ -78,6 +90,10 @@ apiRs:
   image:
     repository: centaur-api-rs
     <<: *release
+    # api-rs runs the PR #5 build (iron-proxy upstream allowlist support);
+    # every other image stays on the release tag. Repin to a main-built tag
+    # after PR #5 merges and a fresh image is side-loaded.
+    tag: "0.1.139-b375f7f1"
   runMigrations: true
   syncInfraSecrets: true
   # Sized for the 8 GiB / 2 vCPU VM shared with console + postgres. Raise the
@@ -85,6 +101,11 @@ apiRs:
   sandboxWarmPoolSize: 1
   extraEnv:
     CENTAUR_DEFAULT_PERSONA: chief
+    # Extra sandbox passthrough names on top of the 32 the chart renders
+    # from apiRs.etl.* (the chart appends these to SESSION_SANDBOX_PASSTHROUGH_ENV).
+    # These keys hold credentials the in-sandbox infra tools need; values come
+    # from the out-of-band centaur-infra-env Secret (not Helm-managed).
+    SESSION_SANDBOX_PASSTHROUGH_ENV: "CENTAUR_GITHUB_APP_ID,CENTAUR_GITHUB_APP_PEM,CENTAUR_TAILSCALE_CLIENT_ID,CENTAUR_TAILSCALE_CLIENT_SECRET,CENTAUR_TAILSCALE_AUDIT_CLIENT_ID,CENTAUR_TAILSCALE_AUDIT_CLIENT_SECRET,RBE_API_TOKEN,CENTAUR_PROXMOX_TOKEN_SECRET,CENTAUR_PROXMOX_BASE_URL"
   resources:
     requests:
       cpu: 250m
@@ -156,3 +177,22 @@ postgres:
 # duplicate controller and a CRD-ownership conflict.
 agentSandbox:
   enabled: false
+
+# --- Out-of-band live state (NOT Helm-managed — do not automate) -----------------
+# These cluster/host changes exist outside this release and must survive helm
+# upgrades:
+#
+# 1. CoreDNS NodeHosts (k3s-managed, kube-system/coredns ConfigMap):
+#      100.96.27.92 pve-03
+#      100.96.27.92 pve-03.tailf55d56.ts.net
+#    Lets in-cluster pods (iron-proxy) resolve the Proxmox API host over the
+#    tailnet. Re-apply with `kubectl edit configmap -n kube-system coredns`
+#    if a k3s upgrade regenerates the Corefile.
+#
+# 2. pve-03 runs `tailscale serve --bg https+insecure://localhost:8006`
+#    because iron-proxy rejects pveproxy's self-signed certificate; the serve
+#    listener fronts the Proxmox API with a tailnet cert. Sandboxes reach it
+#    via CENTAUR_PROXMOX_BASE_URL=https://pve-03.tailf55d56.ts.net/api2/json,
+#    which lives in the out-of-band centaur-infra-env Secret (see
+#    SESSION_SANDBOX_PASSTHROUGH_ENV above). If pve-03 reboots, confirm the
+#    serve config survived (`tailscale serve status` on pve-03).
