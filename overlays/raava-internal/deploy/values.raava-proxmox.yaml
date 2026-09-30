@@ -69,11 +69,11 @@ overlays:
     - repo: paradigmxyz/centaur
       ref: "abe1d95e8289d362364a31677b01623611927144"
       visibility: public
-    # Raava overlay pinned to fork main (7055b395). Also matches the live
-    # api-rs KUBERNETES_TOOLS_EXTRA_SOURCES pin. Bump this after PR
-    # raava-solutions/centaur#4 (fix/rbe-tool-script) merges to main.
+    # Raava overlay pinned to fork main post-#4 (rbe CLI entrypoint fix,
+    # d4411288). Drives both repo-cache REPOSITORY_REFS and api-rs
+    # KUBERNETES_TOOLS_EXTRA_SOURCES.
     - repo: raava-solutions/centaur
-      ref: "7055b395bd3fcc4800ba5e611fe5ec1b1a7bf9fc"
+      ref: "d44112880b227f7a059b9489ce44b0adcc3399a2"
       toolsSubdir: overlays/raava-internal/tools
       skillsSubdir: overlays/raava-internal/.agents/skills
       workflowsSubdir: overlays/raava-internal/workflows
