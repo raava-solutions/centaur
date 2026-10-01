@@ -4,6 +4,7 @@ name: Release Chart
   pull_request:
     branches:
       - main
+      - feat/rust-production-cutover
     paths:
       - "contrib/chart/**"
       - ".github/workflows/release-chart.yml"
@@ -20,7 +21,7 @@ jobs:
   release:
     permissions:
       contents: write
-    runs-on: depot-ubuntu-24.04-16
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-24.04"') }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
