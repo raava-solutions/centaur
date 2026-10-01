@@ -29,8 +29,11 @@ ironProxy:
   # tailnet address (Proxmox API) on the upstream ports. Requires the chart
   # support from PR raava-solutions/centaur#5 (fix/iron-proxy-upstream-allow-cidrs);
   # until that merges into this branch the key is inert.
+  # 100.101.29.91 is asus-trx50's tailnet address, dialed by iron-proxy when a
+  # sandbox Codex falls back to the zap provider (GLM, see codex.fallback).
   upstreamAllowCidrs:
     - 100.96.27.92/32
+    - 100.101.29.91/32
   image:
     repository: centaur-iron-proxy
     <<: *release
@@ -132,6 +135,25 @@ slackbotv2:
     limits:
       memory: 384Mi
 
+# --- Codex usage-limit fallback --------------------------------------------------
+# When OpenAI rejects a Codex turn for usage-limit/quota exhaustion, the
+# sandbox harness re-resumes the thread on the zap provider (self-hosted
+# GLM-5.3-Flash behind the ds4 gateway on asus-trx50, fronted by
+# `tailscale serve` so the base URL is plain HTTPS on 443) and re-submits the
+# turn. The gateway key must exist as ZAP_API_KEY in the 1Password Connect
+# vault (see "Out-of-band live state" below); iron-proxy injects it only for
+# the zap host, sandboxes hold a same-name placeholder.
+codex:
+  customProviders:
+    zap:
+      name: zap
+      baseUrl: https://asus-trx50.tailf55d56.ts.net/v1
+      apiKeyEnv: ZAP_API_KEY
+      defaultModel: glm-5-3-flash
+  fallback:
+    provider: zap
+    model: glm-5-3-flash
+
 # --- Sandboxes ------------------------------------------------------------------
 sandbox:
   controller: pod # api-rs creates plain pods; the standalone agent-sandbox
@@ -202,3 +224,17 @@ agentSandbox:
 #    which lives in the out-of-band centaur-infra-env Secret (see
 #    SESSION_SANDBOX_PASSTHROUGH_ENV above). If pve-03 reboots, confirm the
 #    serve config survived (`tailscale serve status` on pve-03).
+#
+# 3. CoreDNS NodeHosts (kube-system/coredns ConfigMap, same mechanism as #1):
+#      100.101.29.91 asus-trx50
+#      100.101.29.91 asus-trx50.tailf55d56.ts.net
+#    Lets per-sandbox iron-proxy pods resolve the zap fallback provider host.
+#    asus-trx50 already fronts its GLM gateway with `tailscale serve`
+#    (/v1 -> localhost:4000) with a tailnet cert, so no serve change is needed
+#    there.
+#
+# 4. ZAP_API_KEY in the 1Password Connect vault (item named ZAP_API_KEY,
+#    credential field): the ds4 gateway bearer key, sourced from
+#    asus-trx50:~zay/.config/modelctl/gateway-api-key (mode 0600, do not copy
+#    into this repo or cluster Secrets). Until this item exists, fallback turns
+#    fail with the gateway's 401 and surface as ordinary turn errors.

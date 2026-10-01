@@ -386,6 +386,10 @@ fn run_codex_user_turn<W: Write>(
     // re-running them would duplicate output and repeat side effects.
     let max_retries = engine_retry_max();
     let mut retries = 0u32;
+    // Guard against fallback loops: after one provider switch the thread is
+    // pinned to the fallback provider, so a second usage-limit failure is
+    // surfaced instead of re-resuming.
+    let mut fell_back = false;
     loop {
         let turn_request_id = next_request_id(request_id);
         codex.send_request(turn_request_id, "turn/start", params.clone(), traceparent)?;
@@ -425,6 +429,72 @@ fn run_codex_user_turn<W: Write>(
                 );
                 thread::sleep(retry_backoff(retries));
             }
+            TurnTermination::UsageLimitReached { withheld } => {
+                let fallback = fallback_provider().filter(|fallback| {
+                    thread_provider.as_deref() != Some(fallback.provider.as_str())
+                });
+                let fallback = match (fallback, fell_back) {
+                    (Some(fallback), false) => fallback,
+                    // No fallback configured, already on the fallback provider,
+                    // or a fallback attempt already happened for this turn:
+                    // release the withheld status and error so the client sees
+                    // the real usage-limit failure (historical behavior).
+                    _ => {
+                        for value in &withheld {
+                            telemetry.observe_wire_value(value);
+                            write_value(stdout, value)?;
+                        }
+                        return Ok(());
+                    }
+                };
+                let from_provider = thread_provider.as_deref().unwrap_or("unknown");
+                eprintln!(
+                    "codex usage limit reached on provider `{from_provider}`; \
+                     resuming thread on fallback provider `{}`",
+                    fallback.provider
+                );
+                // Durable, client-visible record of the switch: every harness
+                // stdout line is persisted as a session event, and `warning` is
+                // a standard app-server notification.
+                write_value(
+                    stdout,
+                    &json!({
+                        "method": "warning",
+                        "params": {
+                            "threadId": thread_id.as_deref(),
+                            "message": fallback_warning_message(&fallback, from_provider),
+                        }
+                    }),
+                )?;
+                if let Err(error) = resume_thread_on_fallback_provider(
+                    codex,
+                    stdout,
+                    request_id,
+                    thread_id.as_deref().unwrap_or_default(),
+                    &fallback,
+                    traceparent,
+                ) {
+                    eprintln!("codex fallback resume failed: {error:#}");
+                    for value in &withheld {
+                        telemetry.observe_wire_value(value);
+                        write_value(stdout, value)?;
+                    }
+                    return Err(error);
+                }
+                fell_back = true;
+                *thread_provider = Some(fallback.provider.clone());
+                if let Some(model) = &fallback.model {
+                    *thread_model = Some(model.clone());
+                    params["model"] = Value::String(model.clone());
+                    telemetry.set_model(model.clone());
+                } else if let Some(map) = params.as_object_mut() {
+                    // No fallback model configured: drop the per-turn model so
+                    // codex applies the resumed thread's model rather than
+                    // requesting the primary provider's model from the fallback.
+                    map.remove("model");
+                }
+                telemetry.set_model_provider(fallback.provider);
+            }
         }
     }
 }
@@ -432,6 +502,90 @@ fn run_codex_user_turn<W: Write>(
 struct StartedCodexThread {
     id: String,
     model: Option<String>,
+}
+
+/// Usage-limit fallback target. When the thread's provider rejects a turn for
+/// quota exhaustion before any output streams, the thread is re-resumed on
+/// this provider and the turn re-submitted there. Disabled unless
+/// CODEX_FALLBACK_MODEL_PROVIDER names a provider codex knows (for example one
+/// from CODEX_CUSTOM_PROVIDERS). CODEX_FALLBACK_MODEL selects the model on
+/// that provider; when unset no per-turn model is sent and codex uses the
+/// resumed thread's model, so set it unless the fallback provider serves the
+/// configured default model.
+struct FallbackProvider {
+    provider: String,
+    model: Option<String>,
+}
+
+fn fallback_provider() -> Option<FallbackProvider> {
+    parse_fallback_provider(
+        env::var("CODEX_FALLBACK_MODEL_PROVIDER").ok().as_deref(),
+        env::var("CODEX_FALLBACK_MODEL").ok().as_deref(),
+    )
+}
+
+fn parse_fallback_provider(
+    provider: Option<&str>,
+    model: Option<&str>,
+) -> Option<FallbackProvider> {
+    let provider = provider
+        .map(str::trim)
+        .filter(|provider| !provider.is_empty())?
+        .to_owned();
+    let model = model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_owned);
+    Some(FallbackProvider { provider, model })
+}
+
+fn fallback_warning_message(fallback: &FallbackProvider, from_provider: &str) -> String {
+    match &fallback.model {
+        Some(model) => format!(
+            "Codex usage limit reached on provider `{from_provider}`; \
+             resuming this thread on fallback provider `{}` with model `{model}`.",
+            fallback.provider
+        ),
+        None => format!(
+            "Codex usage limit reached on provider `{from_provider}`; \
+             resuming this thread on fallback provider `{}`.",
+            fallback.provider
+        ),
+    }
+}
+
+/// Re-resume the thread on the fallback provider, preserving its full
+/// history. Codex pins the provider at thread start, but `thread/resume` on an
+/// idle loaded thread cold-resumes it with the given config overrides, which
+/// is what makes a provider switch possible without losing context.
+/// `serviceTier: null` clears a pinned tier (e.g. an OpenAI-specific tier from
+/// the baked config) that plain OpenAI-compatible fallback providers reject.
+fn resume_thread_on_fallback_provider<W: Write>(
+    codex: &mut CodexJsonRpcChild,
+    stdout: &mut W,
+    request_id: &mut i64,
+    thread_id: &str,
+    fallback: &FallbackProvider,
+    traceparent: Option<&str>,
+) -> Result<()> {
+    let cwd = env::current_dir()?.display().to_string();
+    let mut params = json!({
+        "threadId": thread_id,
+        "cwd": cwd,
+        "approvalPolicy": "never",
+        "approvalsReviewer": "user",
+        "sandbox": "danger-full-access",
+        "modelProvider": fallback.provider,
+        "serviceTier": Value::Null,
+        "excludeTurns": true,
+    });
+    if let Some(model) = &fallback.model {
+        params["model"] = Value::String(model.clone());
+    }
+    let id = next_request_id(request_id);
+    codex.send_request(id, "thread/resume", params, traceparent)?;
+    codex.read_response_or_forward(id, stdout)?;
+    Ok(())
 }
 
 fn start_or_resume_thread<W: Write>(
@@ -671,6 +825,9 @@ impl CodexJsonRpcChild {
                 GuardStep::Retry(withheld) => {
                     return Ok(TurnTermination::RetriableEngineError { withheld });
                 }
+                GuardStep::FallbackUsageLimit(withheld) => {
+                    return Ok(TurnTermination::UsageLimitReached { withheld });
+                }
                 GuardStep::Forward(values) => {
                     for value in &values {
                         telemetry.observe_wire_value(value);
@@ -778,6 +935,11 @@ enum TurnTermination {
     /// were withheld so the caller can drop them and re-submit the turn, or
     /// forward them once its retry budget is spent.
     RetriableEngineError { withheld: Vec<Value> },
+    /// The turn failed with a usage-limit/quota error before streaming any
+    /// output. Like `RetriableEngineError`, the status and error are withheld
+    /// so the caller can re-resume the thread on a fallback provider and
+    /// re-submit the turn, or forward them when no fallback applies.
+    UsageLimitReached { withheld: Vec<Value> },
 }
 
 /// Per-turn notification filter. Sits between codex's stdout and the client so
@@ -803,6 +965,10 @@ enum GuardStep {
     /// Withhold these (retriable) notifications; the caller drops them and
     /// re-submits the turn, or forwards them if it is out of retry budget.
     Retry(Vec<Value>),
+    /// Withhold these notifications; the caller switches the thread to the
+    /// usage-limit fallback provider and re-submits the turn, or forwards them
+    /// when no fallback applies.
+    FallbackUsageLimit(Vec<Value>),
 }
 
 impl TurnGuard {
@@ -820,6 +986,17 @@ impl TurnGuard {
             }
             withheld.push(value);
             return GuardStep::Retry(withheld);
+        }
+
+        // A usage-limit error before any output: same withhold shape, but the
+        // remedy is a provider switch, not a same-provider resubmission.
+        if terminal && method == "error" && !self.streamed && is_usage_limit_error(&value) {
+            let mut withheld = Vec::new();
+            if let Some(status) = self.pending_system_error.take() {
+                withheld.push(status);
+            }
+            withheld.push(value);
+            return GuardStep::FallbackUsageLimit(withheld);
         }
 
         // We are forwarding `value`; release any held status first to preserve
@@ -882,6 +1059,25 @@ fn is_retriable_engine_error(value: &Value) -> bool {
     };
     message.contains("Engine not found")
         || (message.contains("Job registration failed") && message.contains("404"))
+}
+
+/// True for codex's usage-limit/quota-exhaustion failure. The precise signal
+/// is `codexErrorInfo: "usageLimitExceeded"` on the error notification; when
+/// the field is absent (older/newer codex builds, or providers that surface
+/// the plain-text form, e.g. "The usage limit has been reached"), fall back to
+/// a message match. A present-but-different codexErrorInfo is authoritative:
+/// other classified failures never trigger a provider switch.
+fn is_usage_limit_error(value: &Value) -> bool {
+    if let Some(info) = value
+        .pointer("/params/error/codexErrorInfo")
+        .and_then(Value::as_str)
+    {
+        return info == "usageLimitExceeded" || info == "usage_limit_exceeded";
+    }
+    value
+        .pointer("/params/error/message")
+        .and_then(Value::as_str)
+        .is_some_and(|message| message.to_ascii_lowercase().contains("usage limit"))
 }
 
 /// True for a `thread/status/changed` notification reporting a `systemError`.
@@ -1064,15 +1260,54 @@ mod tests {
         json!({ "method": "item/agentMessage/delta", "params": { "delta": "hi" } })
     }
 
-    /// Runs a `(notification, is_terminal)` sequence through a `TurnGuard` and
-    /// returns the methods forwarded plus, when a retry is signalled, the methods
-    /// withheld for the caller to drop (on retry) or forward (out of budget).
-    fn drive(events: Vec<(Value, bool)>) -> (Vec<String>, Option<Vec<String>>) {
+    fn usage_limit_error() -> Value {
+        json!({
+            "method": "error",
+            "params": {
+                "error": {
+                    "codexErrorInfo": "usageLimitExceeded",
+                    "message": "The usage limit has been reached"
+                },
+                "willRetry": false
+            }
+        })
+    }
+
+    /// Like `drive`, but also reports usage-limit withholdings.
+    fn drive_all(
+        events: Vec<(Value, bool)>,
+    ) -> (Vec<String>, Option<Vec<String>>, Option<Vec<String>>) {
         let mut guard = TurnGuard::default();
         let mut forwarded = Vec::new();
         for (value, terminal) in events {
             match guard.observe(value, terminal) {
                 GuardStep::Retry(withheld) => {
+                    return (methods(&forwarded), Some(methods(&withheld)), None);
+                }
+                GuardStep::FallbackUsageLimit(withheld) => {
+                    return (methods(&forwarded), None, Some(methods(&withheld)));
+                }
+                GuardStep::Forward(values) => forwarded.extend(values),
+                GuardStep::ForwardThenDone(values) => {
+                    forwarded.extend(values);
+                    return (methods(&forwarded), None, None);
+                }
+            }
+        }
+        (methods(&forwarded), None, None)
+    }
+
+    /// Runs a `(notification, is_terminal)` sequence through a `TurnGuard` and
+    /// returns the methods forwarded plus, when a retry is signalled, the methods
+    /// withheld for the caller to drop (on retry) or forward (out of budget).
+    /// Fallback withholdings share the retry slot; these tests never produce
+    /// them (`drive_all` separates the two).
+    fn drive(events: Vec<(Value, bool)>) -> (Vec<String>, Option<Vec<String>>) {
+        let mut guard = TurnGuard::default();
+        let mut forwarded = Vec::new();
+        for (value, terminal) in events {
+            match guard.observe(value, terminal) {
+                GuardStep::Retry(withheld) | GuardStep::FallbackUsageLimit(withheld) => {
                     return (methods(&forwarded), Some(methods(&withheld)));
                 }
                 GuardStep::Forward(values) => forwarded.extend(values),
@@ -1190,6 +1425,94 @@ mod tests {
             forwarded,
             vec!["turn/started", "thread/status/changed", "error"]
         );
+    }
+
+    #[test]
+    fn parse_fallback_provider_requires_a_provider() {
+        assert!(parse_fallback_provider(None, None).is_none());
+        assert!(parse_fallback_provider(Some(""), None).is_none());
+        assert!(parse_fallback_provider(Some("   "), None).is_none());
+        let fallback =
+            parse_fallback_provider(Some(" zap "), Some(" glm-5-3-flash ")).expect("provider set");
+        assert_eq!(fallback.provider, "zap");
+        assert_eq!(fallback.model.as_deref(), Some("glm-5-3-flash"));
+        let provider_only = parse_fallback_provider(Some("zap"), None).expect("provider set");
+        assert_eq!(provider_only.provider, "zap");
+        assert_eq!(provider_only.model, None);
+        let blank_model = parse_fallback_provider(Some("zap"), Some("  ")).expect("provider set");
+        assert_eq!(blank_model.model, None);
+    }
+
+    #[test]
+    fn detects_usage_limit_errors_precisely() {
+        // Structured signal.
+        assert!(is_usage_limit_error(&usage_limit_error()));
+        // Snake-case variant spelling.
+        assert!(is_usage_limit_error(&json!({
+            "method": "error",
+            "params": { "error": { "codexErrorInfo": "usage_limit_exceeded" } }
+        })));
+        // Plain-text form with no codexErrorInfo field.
+        assert!(is_usage_limit_error(&json!({
+            "method": "error",
+            "params": { "error": { "message": "The usage limit has been reached" } }
+        })));
+        // A present-but-different codexErrorInfo is authoritative.
+        assert!(!is_usage_limit_error(&json!({
+            "method": "error",
+            "params": { "error": {
+                "codexErrorInfo": "other",
+                "message": "usage limit adjacent text"
+            } }
+        })));
+        // Unrelated errors never match.
+        assert!(!is_usage_limit_error(&engine_error()));
+        assert!(!is_usage_limit_error(
+            &json!({ "method": "error", "params": { "error": { "message": "boom" } } })
+        ));
+    }
+
+    #[test]
+    fn withholds_output_free_usage_limit_error_for_fallback() {
+        let (forwarded, retry, fallback) = drive_all(vec![
+            (turn_started(), false),
+            (system_error_status(), false),
+            (usage_limit_error(), true),
+        ]);
+        assert_eq!(forwarded, vec!["turn/started"]);
+        assert_eq!(retry, None);
+        assert_eq!(
+            fallback,
+            Some(vec![
+                "thread/status/changed".to_string(),
+                "error".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn never_falls_back_after_output_streamed() {
+        // A usage-limit error mid-turn (after output or tool activity) is
+        // forwarded as-is: re-running on another provider would duplicate
+        // output and repeat side effects.
+        let (forwarded, retry, fallback) = drive_all(vec![
+            (agent_delta(), false),
+            (system_error_status(), false),
+            (usage_limit_error(), true),
+        ]);
+        assert_eq!(retry, None);
+        assert_eq!(fallback, None);
+        assert_eq!(
+            forwarded,
+            vec!["item/agentMessage/delta", "thread/status/changed", "error"]
+        );
+    }
+
+    #[test]
+    fn usage_limit_error_is_not_classified_as_engine_retry() {
+        let (_forwarded, retry, fallback) = drive_all(vec![(usage_limit_error(), true)]);
+        assert_eq!(retry, None);
+        assert!(fallback.is_some());
     }
 
     #[test]

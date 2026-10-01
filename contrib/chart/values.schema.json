@@ -227,6 +227,14 @@
             "required": ["name", "baseUrl", "apiKeyEnv"],
             "additionalProperties": false
           }
+        },
+        "fallback": {
+          "type": "object",
+          "properties": {
+            "provider": { "type": "string" },
+            "model": { "type": "string" }
+          },
+          "additionalProperties": false
         }
       }
     },

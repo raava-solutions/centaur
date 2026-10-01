@@ -302,6 +302,18 @@ codex:
   #       # Optional; callers must pass --model when omitted.
   #       defaultModel: example-model
   customProviders: {}
+  # Usage-limit fallback for the codex harness: when the active provider
+  # rejects a turn for quota/usage-limit exhaustion before the turn streams any
+  # output, harness-server re-resumes the thread on `provider` (preserving
+  # conversation history) and re-submits the turn once. `provider` must be a
+  # provider id known to sandbox Codex — typically one of codex.customProviders.
+  # Empty provider disables the fallback (the default). The switch is recorded
+  # as a durable `warning` event on the session.
+  fallback:
+    provider: ""
+    # Model requested on the fallback provider. Set this unless the fallback
+    # provider serves Codex's configured default model.
+    model: ""
 
 sandbox:
   controller: pod
