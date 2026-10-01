@@ -266,6 +266,10 @@ spec:
 {{- end }}
             - name: IRON_CONTROL_SYNC_INFRA_SECRETS
               value: {{ .Values.apiRs.syncInfraSecrets | quote }}
+            - name: IRON_CONTROL_SYNC_TOOL_SECRETS
+              value: {{ .Values.apiRs.syncToolSecrets | quote }}
+            - name: IRON_CONTROL_TOOL_ROLES_ASSIGN_BY_DEFAULT
+              value: {{ .Values.apiRs.toolRolesAssignByDefault | quote }}
             - name: RUST_LOG
               value: info
             - name: TOOL_DIRS

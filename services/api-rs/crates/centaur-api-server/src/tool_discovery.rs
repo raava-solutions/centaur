@@ -54,6 +54,16 @@ pub struct DiscoveredToolProxyFragment {
     pub secret_count: usize,
 }
 
+/// One discovered tool's proxy fragment, registered with iron-control as the
+/// tool's `tool-<slug>` role when tool-secret sync is enabled. Secret counts
+/// are per tool, before `fragment_from_secrets` merges duplicate identities.
+#[derive(Clone, Debug)]
+pub struct DiscoveredToolRole {
+    pub name: String,
+    pub fragment: ProxyFragment,
+    pub secret_count: usize,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DiscoveredToolCatalog {
     pub(crate) tools: Vec<DiscoveredTool>,
@@ -157,6 +167,36 @@ pub fn discover_tool_proxy_fragment(
         tool_count: tools.len(),
         secret_count,
     })
+}
+
+/// Discover each tool's declared secrets as a per-tool proxy fragment, for
+/// registration as that tool's `tool-<slug>` iron-control role. Tools without
+/// secrets are skipped (there is no role to register). The shared
+/// plugin-metadata scan already drops tools with invalid secret metadata (with
+/// a warning), so one malformed tool cannot block the rest.
+pub fn discover_tool_roles(
+    tool_dirs: &[PathBuf],
+) -> Result<Vec<DiscoveredToolRole>, ToolDiscoveryError> {
+    let tools = collect_plugin_metadata(tool_dirs)?.tools;
+    let mut roles = Vec::new();
+    for tool in tools {
+        if tool.secrets.is_empty() {
+            continue;
+        }
+        let secret_count = tool.secrets.len();
+        let fragment = fragment_from_secrets(tool.secrets)?;
+        roles.push(DiscoveredToolRole {
+            name: tool.name,
+            fragment,
+            secret_count,
+        });
+    }
+    info!(
+        tool_dirs = ?tool_dirs,
+        tool_role_count = roles.len(),
+        "discovered api-rs tool roles"
+    );
+    Ok(roles)
 }
 
 pub fn discover_persona_registry(
@@ -1793,6 +1833,68 @@ secrets = [
             .as_sequence()
             .expect("oauth tokens");
         assert_eq!(tokens[0]["labels"]["centaur-tool"].as_str(), Some("gsuite"));
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn discovers_per_tool_role_fragments() {
+        let temp = temp_dir("api-rs-tool-roles");
+        let base = temp.join("base");
+        write_tool(
+            &base.join("category").join("alpha"),
+            r#"
+[project]
+description = "alpha"
+
+[tool.centaur]
+secrets = [{type = "http", name = "ALPHA_TOKEN", match_headers = ["Authorization"], hosts = ["api.alpha.test"]}]
+"#,
+        );
+        write_tool(
+            &base.join("beta"),
+            r#"
+[project]
+description = "beta"
+
+[tool.centaur]
+secrets = [
+  {type = "http", name = "BETA_TOKEN", match_query = true, hosts = ["api.beta.test"]},
+  {type = "http", name = "BETA_EXTRA", mode = "inject", inject_header = "x-beta", hosts = ["api.beta.test"]},
+]
+"#,
+        );
+        // A secretless tool registers no role.
+        write_tool(
+            &base.join("secretless"),
+            r#"
+[project]
+description = "no secrets"
+"#,
+        );
+
+        let roles = discover_tool_roles(std::slice::from_ref(&base)).unwrap();
+
+        assert_eq!(roles.len(), 2);
+        let alpha = roles.iter().find(|role| role.name == "alpha").unwrap();
+        assert_eq!(alpha.secret_count, 1);
+        let alpha_secrets = &alpha.fragment.transforms[0].config.secrets;
+        assert_eq!(alpha_secrets.len(), 1);
+        assert_eq!(alpha_secrets[0].id.as_deref(), Some("ALPHA_TOKEN"));
+        let beta = roles.iter().find(|role| role.name == "beta").unwrap();
+        assert_eq!(beta.secret_count, 2);
+        // Each tool's fragment carries only its own secrets and labels.
+        let beta_labels = beta.fragment.transforms[0].config.secrets[0]
+            .extra
+            .get("labels")
+            .and_then(YamlValue::as_mapping)
+            .expect("static secret labels");
+        assert_eq!(
+            beta_labels
+                .get(YamlValue::String("centaur-tool".to_owned()))
+                .and_then(YamlValue::as_str),
+            Some("beta")
+        );
 
         let _ = fs::remove_dir_all(temp);
     }

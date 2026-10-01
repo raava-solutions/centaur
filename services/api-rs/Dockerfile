@@ -35,8 +35,10 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     && pip3 install --break-system-packages --no-compile /app/centaur_sdk /app/workflow-python \
     && python3 -c "import boto3, botocore" \
     && rm -rf /usr/share/doc /usr/share/man /usr/share/info
-# api-rs discovers tool secret metadata from pyproject.toml at startup so it can
-# register the full tool secret set with iron-control before sandboxes claim.
+# api-rs discovers tool secret metadata from pyproject.toml at startup. It is
+# used for sandbox placeholder env and, when IRON_CONTROL_SYNC_TOOL_SECRETS=true,
+# to register each tool's secrets with iron-control as a per-tool `tool-<slug>`
+# role before sandboxes claim.
 COPY tools/ /app/tools/
 COPY workflows/ /app/workflows/
 ENV PYTHON_WORKFLOW_HOST_PATH=/app/workflow-python/workflow_host.py

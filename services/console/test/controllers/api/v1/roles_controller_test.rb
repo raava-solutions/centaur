@@ -96,6 +96,33 @@ module Api
         assert_equal({ "tier" => "base" }, role.labels)
       end
 
+      test "PUT sets assign_by_default when present and leaves it when omitted" do
+        role = roles(:acme_infra)
+        role.update!(assign_by_default: false)
+
+        put api_v1_role_url(id: role.oid),
+            params: { data: { assign_by_default: true } }.to_json,
+            headers: auth_headers
+        assert_response :ok
+        assert_predicate role.reload, :assign_by_default?
+        assert_equal true, json_body.dig("data", "assign_by_default")
+
+        put api_v1_role_url(id: role.oid),
+            params: { data: { name: "Still Infrastructure" } }.to_json,
+            headers: auth_headers
+        assert_response :ok
+        assert_predicate role.reload, :assign_by_default?
+        assert_equal "Still Infrastructure", role.name
+      end
+
+      test "POST creates a default-assigned role" do
+        body = { data: { foreign_id: "tool-rbe", name: "Tool rbe", assign_by_default: true } }
+        post api_v1_roles_url, params: body.to_json, headers: auth_headers
+        assert_response :created
+
+        assert_predicate Role.find_by!(foreign_id: "tool-rbe"), :assign_by_default?
+      end
+
       test "PUT replaces role Slack channel permissions when present" do
         role = roles(:acme_infra)
         role.slack_channel_permissions.create!(

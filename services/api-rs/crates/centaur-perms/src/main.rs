@@ -909,6 +909,7 @@ fn role_identity(role: &RoleSpec) -> IdentityInput {
         foreign_id: role.foreign_id.clone(),
         name: role.name.clone(),
         labels: managed_labels(),
+        assign_by_default: role.assign_by_default,
     }
 }
 
