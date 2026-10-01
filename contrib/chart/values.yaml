@@ -460,10 +460,23 @@ apiRs:
   sandboxRunningLimit: 0
   sandboxHotIdleGraceSecs: 300
   # When true, api-rs upserts the shared iron-control infra role and its
-  # backing secrets at startup and on tool-secret reconciliation intervals.
+  # backing secrets at startup.
   # Set false when multiple Centaur instances share one console/1Password
   # Connect control plane and infra secrets are managed out of band.
   syncInfraSecrets: true
+  # When true, api-rs also registers every discovered tool's declared secrets
+  # at startup as that tool's per-tool iron-control role (`tool-<slug>`) — the
+  # same resources `centaur-perms roles grant --tool` writes. Registration
+  # alone grants nothing: principals receive a tool role via explicit
+  # centaur-perms/console grants or, for principals created later, via
+  # toolRolesAssignByDefault below.
+  syncToolSecrets: false
+  # When true (and syncToolSecrets is on), registered `tool-<slug>` roles are
+  # marked assign-by-default in the console so every newly created session
+  # principal receives all of them — the single-tenant "all tools for everyone"
+  # posture. Existing principals are untouched; grant them the roles once with
+  # `centaur-perms principals grant <principal> --role tool-<slug>`.
+  toolRolesAssignByDefault: false
   # Workflow enablement policy. Production defaults to all workflows enabled.
   # Set workflowEnableMode: allowlist in staging and list allowed workflow names
   # in workflowAllowedNames as a comma/whitespace-separated string.
