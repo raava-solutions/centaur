@@ -211,6 +211,10 @@ impl TurnTelemetry {
         self.model = model.into();
     }
 
+    pub(crate) fn set_model_provider(&mut self, model_provider: impl Into<String>) {
+        self.model_provider = model_provider.into();
+    }
+
     pub(crate) fn observe_wire_value(&mut self, value: &Value) {
         self.observe_tool_notification(value);
         self.remember_turn_id(value);

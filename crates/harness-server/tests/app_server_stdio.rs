@@ -598,6 +598,101 @@ fn fake_codex_blocks_mode_spawns_app_server_and_translates_user_blocks() {
 }
 
 #[test]
+fn fake_codex_blocks_mode_falls_back_to_configured_provider_on_usage_limit() {
+    let fake_codex = temp_path("fake-usage-limited-codex.sh");
+    let fake_codex_log = temp_path("fake-usage-limited-codex-requests.jsonl");
+    let script = fake_codex_usage_limit_app_server_script(&fake_codex_log);
+    std::fs::write(&fake_codex, script).expect("write fake codex script");
+    let mut permissions = std::fs::metadata(&fake_codex)
+        .expect("fake codex metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&fake_codex, permissions).expect("chmod fake codex script");
+
+    let mut bridge = BridgeProcess::spawn_harness_blocks_envs(
+        Harness::Codex,
+        None,
+        Some((
+            "CODEX_BIN",
+            fake_codex.to_str().expect("utf-8 fake codex path"),
+        )),
+        &[
+            ("CODEX_FALLBACK_MODEL_PROVIDER", "zap"),
+            ("CODEX_FALLBACK_MODEL", "glm-5-3-flash"),
+        ],
+    );
+    let turn = bridge.run_blocks_user_turn("say codex blocks", Duration::from_secs(10));
+    let _stdout_lines = bridge.finish_successfully();
+
+    // The re-submitted turn on the fallback provider completes.
+    assert_completed_turn(&turn);
+    assert_eq!(turn.text_from_deltas, "codex blocks");
+    // The switch is announced with a warning notification, and the withheld
+    // usage-limit error never reaches the client.
+    assert!(
+        turn.methods.contains(&"warning".to_string()),
+        "missing fallback warning; got {:?}",
+        turn.methods
+    );
+    assert!(
+        !turn.methods.contains(&"error".to_string()),
+        "usage-limit error should have been withheld; got {:?}",
+        turn.methods
+    );
+
+    let requests = std::fs::read_to_string(&fake_codex_log).expect("read fake codex request log");
+    let requests: Vec<Value> = requests
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("fake codex request JSON"))
+        .collect();
+
+    // The thread is re-resumed on the fallback provider with the OpenAI-specific
+    // service tier cleared.
+    let resume = requests
+        .iter()
+        .find(|value| value.get("method").and_then(Value::as_str) == Some("thread/resume"))
+        .unwrap_or_else(|| panic!("no thread/resume sent; requests={requests:?}"));
+    assert_eq!(
+        resume.pointer("/params/threadId").and_then(Value::as_str),
+        Some("thread-1")
+    );
+    assert_eq!(
+        resume
+            .pointer("/params/modelProvider")
+            .and_then(Value::as_str),
+        Some("zap")
+    );
+    assert_eq!(
+        resume.pointer("/params/model").and_then(Value::as_str),
+        Some("glm-5-3-flash")
+    );
+    assert!(
+        resume
+            .get("params")
+            .and_then(|params| params.get("serviceTier"))
+            == Some(&Value::Null),
+        "fallback resume should clear serviceTier; params={:?}",
+        resume.get("params")
+    );
+
+    // The turn is re-submitted once, with the fallback model.
+    let turn_starts: Vec<&Value> = requests
+        .iter()
+        .filter(|value| value.get("method").and_then(Value::as_str) == Some("turn/start"))
+        .collect();
+    assert_eq!(turn_starts.len(), 2, "requests={requests:?}");
+    assert_eq!(
+        turn_starts[1]
+            .pointer("/params/model")
+            .and_then(Value::as_str),
+        Some("glm-5-3-flash")
+    );
+
+    let _ = std::fs::remove_file(fake_codex);
+    let _ = std::fs::remove_file(fake_codex_log);
+}
+
+#[test]
 fn fake_codex_blocks_mode_interrupts_active_turn() {
     let fake_codex = temp_path("fake-interruptible-codex.sh");
     let fake_codex_log = temp_path("fake-interruptible-codex-requests.jsonl");
@@ -1275,6 +1370,8 @@ impl BridgeProcess {
             "CENTAUR_AMP_APP_BRIDGE_COMMAND",
             "CODEX_MODEL",
             "CODEX_MODEL_PROVIDER",
+            "CODEX_FALLBACK_MODEL_PROVIDER",
+            "CODEX_FALLBACK_MODEL",
             "OPENROUTER_MODEL",
         ] {
             command.env_remove(env_key);
@@ -2331,6 +2428,69 @@ while IFS= read -r line; do
       id=$(request_id "$line")
       printf '{"id":%s,"result":{}}\n' "$id"
       printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","items":[],"itemsView":"full","status":"interrupted","error":null,"startedAt":1,"completedAt":2,"durationMs":1}}}'
+      ;;
+    *)
+      printf '%s\n' "unexpected request: $line" >&2
+      exit 65
+      ;;
+  esac
+done
+"#,
+    );
+    script
+}
+
+fn fake_codex_usage_limit_app_server_script(log_path: &Path) -> String {
+    let mut script = String::new();
+    script.push_str("#!/bin/sh\n");
+    script.push_str("log=");
+    script.push_str(&shell_quote(log_path));
+    script.push_str(
+        r#"
+touch "$log"
+if [ "${1:-}" = "app-server" ] && [ "${2:-}" = "--help" ]; then
+  printf '%s\n' '--listen stdio://'
+  exit 0
+fi
+if [ "${1:-}" != "app-server" ]; then
+  printf '%s\n' 'expected app-server command' >&2
+  exit 64
+fi
+
+request_id() {
+  printf '%s' "$1" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p'
+}
+
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$log"
+  case "$line" in
+    *'"method":"initialize"'*)
+      id=$(request_id "$line")
+      printf '{"id":%s,"result":{"userAgent":"fake-codex"}}\n' "$id"
+      ;;
+    *'"method":"thread/start"'*)
+      id=$(request_id "$line")
+      printf '{"id":%s,"result":{"thread":{"id":"thread-1"}}}\n' "$id"
+      ;;
+    *'"method":"thread/resume"'*)
+      id=$(request_id "$line")
+      printf '{"id":%s,"result":{"thread":{"id":"thread-1"}}}\n' "$id"
+      ;;
+    *'"method":"turn/start"'*)
+      id=$(request_id "$line")
+      # The request line was already appended to the log; the first turn/start
+      # fails with a usage-limit error before any output, the second (the
+      # fallback re-submission) completes.
+      n=$(grep -c '"method":"turn/start"' "$log")
+      printf '{"id":%s,"result":{"turn":{"id":"turn-%s"}}}\n' "$id" "$n"
+      printf '{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-%s","items":[],"itemsView":"full","status":"inProgress","error":null,"startedAt":1,"completedAt":null,"durationMs":null}}}\n' "$n"
+      if [ "$n" -eq 1 ]; then
+        printf '{"method":"error","params":{"error":{"message":"The usage limit has been reached","codexErrorInfo":"usageLimitExceeded"},"willRetry":false,"threadId":"thread-1","turnId":"turn-1"}}\n'
+      else
+        printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-2","itemId":"answer-1","delta":"codex blocks"}}'
+        printf '%s\n' '{"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-2","item":{"type":"agentMessage","id":"answer-1","text":"codex blocks","phase":null,"memoryCitation":null},"completedAtMs":2}}'
+        printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-2","items":[{"type":"agentMessage","id":"answer-1","text":"codex blocks","phase":null,"memoryCitation":null}],"itemsView":"full","status":"completed","error":null,"startedAt":1,"completedAt":2,"durationMs":1}}}'
+      fi
       ;;
     *)
       printf '%s\n' "unexpected request: $line" >&2
