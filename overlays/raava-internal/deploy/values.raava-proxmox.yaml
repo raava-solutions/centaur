@@ -161,6 +161,10 @@ sandbox:
   image:
     repository: centaur-agent
     <<: *release
+    # Sandboxes run the 0.1.140-498059ba build (PR #10 codex fallback provider
+    # in harness-server); every other image stays on the release tag. Repin to
+    # the release tag once a full 0.1.140 image set is side-loaded.
+    tag: "0.1.140-498059ba"
   # codex | amp | claudecode. Must agree with the agent image's default CMD
   # and with the iron-proxy auth fragment api-rs registers.
   harnessEngine: codex
