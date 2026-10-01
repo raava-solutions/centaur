@@ -16,8 +16,8 @@ pub use routes::{
     build_router_with_session_and_workflow_runtime, build_router_with_session_runtime,
 };
 pub use tool_discovery::{
-    DiscoveredToolProxyFragment, ToolDiscoveryConfig, ToolDiscoveryError,
-    discover_persona_registry, discover_tool_proxy_fragment,
+    DiscoveredToolProxyFragment, DiscoveredToolRole, ToolDiscoveryConfig, ToolDiscoveryError,
+    discover_persona_registry, discover_tool_proxy_fragment, discover_tool_roles,
 };
 
 #[cfg(test)]

@@ -445,6 +445,12 @@ pub struct IdentityInput {
     pub name: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub labels: BTreeMap<String, String>,
+    /// Whether newly created principals are assigned this role. ``None`` omits
+    /// the key so the upsert leaves iron-control's current value untouched —
+    /// callers must not send ``Some(false)`` on roles whose default assignment
+    /// they do not own (iron-control manages ``infra``'s default itself).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assign_by_default: Option<bool>,
 }
 
 /// Request body for ``POST``/``PUT /api/v1/principals``.

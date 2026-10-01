@@ -5,7 +5,9 @@
 //! per-sandbox ConfigMap. Under iron-control the same fragments become durable
 //! control-plane state: each fragment's secrets are upserted as typed secret
 //! resources and granted to a role. api-rs registers infra and harness
-//! fragments against the shared infra role.
+//! fragments against the shared infra role; when tool-secret sync is enabled it
+//! also registers each discovered tool's fragment against that tool's
+//! ``tool-<slug>`` role — the same shape `centaur-perms` writes by hand.
 //!
 //! [`secret_inputs_from_fragment`] is the pure translation (fragment → secret
 //! inputs) and is unit-tested without a server; [`register_role`] drives the
@@ -32,10 +34,13 @@ use crate::util::{managed_labels, slugify};
 
 /// A role to register secrets against. ``foreign_id`` is the stable upsert key
 /// (e.g. ``infra`` or ``tool-github``); ``name`` is the human label.
+/// ``assign_by_default`` is forwarded to iron-control on the role upsert;
+/// ``None`` leaves the console-side default-assignment flag untouched.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RoleSpec {
     pub foreign_id: String,
     pub name: String,
+    pub assign_by_default: Option<bool>,
 }
 
 impl RoleSpec {
@@ -44,6 +49,7 @@ impl RoleSpec {
         Self {
             foreign_id: "infra".to_owned(),
             name: "Infra".to_owned(),
+            assign_by_default: None,
         }
     }
 
@@ -52,6 +58,7 @@ impl RoleSpec {
         Self {
             foreign_id: format!("tool-{}", slugify(name)),
             name: format!("Tool {name}"),
+            assign_by_default: None,
         }
     }
 }
@@ -118,6 +125,7 @@ pub async fn register_role(
             foreign_id: role.foreign_id.clone(),
             name: role.name.clone(),
             labels: managed_labels(),
+            assign_by_default: role.assign_by_default,
         })
         .await?;
     grant_inputs_to_role(client, &role_record.id, inputs).await?;

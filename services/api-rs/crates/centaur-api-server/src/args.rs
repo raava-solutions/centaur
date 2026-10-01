@@ -13,7 +13,7 @@ use std::os::unix::fs::PermissionsExt;
 
 use centaur_api_server::{
     DiscoveredToolProxyFragment, SandboxRuntime, ToolDiscoveryConfig, discover_persona_registry,
-    discover_tool_proxy_fragment,
+    discover_tool_proxy_fragment, discover_tool_roles,
 };
 use centaur_iron_control::{
     IdentityInput, IronControlClient, IronControlError, PrincipalInput, RegisterError, RoleSpec,
@@ -768,6 +768,30 @@ struct SandboxArgs {
         action = clap::ArgAction::Set
     )]
     iron_control_sync_infra_secrets: bool,
+    /// Register each discovered tool's declared secrets with iron-control at
+    /// startup as that tool's `tool-<slug>` role — the same resources
+    /// `centaur-perms roles grant --tool` writes, keeping the role ids
+    /// identical no matter which path registers them. Off by default: upstream
+    /// expects operators to grant tool roles to principals explicitly.
+    #[arg(
+        long = "iron-control-sync-tool-secrets",
+        env = "IRON_CONTROL_SYNC_TOOL_SECRETS",
+        default_value_t = false,
+        action = clap::ArgAction::Set
+    )]
+    iron_control_sync_tool_secrets: bool,
+    /// Mark the registered `tool-<slug>` roles assign-by-default in
+    /// iron-control so newly created session principals receive every tool
+    /// role. Only meaningful with `--iron-control-sync-tool-secrets`. Existing
+    /// principals are untouched; grant them the roles once via
+    /// `centaur-perms principals grant <principal> --role tool-<slug>`.
+    #[arg(
+        long = "iron-control-tool-roles-assign-by-default",
+        env = "IRON_CONTROL_TOOL_ROLES_ASSIGN_BY_DEFAULT",
+        default_value_t = false,
+        action = clap::ArgAction::Set
+    )]
+    iron_control_tool_roles_assign_by_default: bool,
     #[arg(
         long = "workflow-host-sandbox",
         env = "WORKFLOW_HOST_SANDBOX",
@@ -806,8 +830,12 @@ impl SandboxArgs {
                     foreign_id: spec.foreign_id,
                     name: spec.name,
                     labels: BTreeMap::from([("managed-by".to_owned(), "centaur".to_owned())]),
+                    assign_by_default: None,
                 })
                 .await?;
+        }
+        if self.iron_control_sync_tool_secrets {
+            self.sync_tool_roles(&client).await?;
         }
         let bootstrap = client
             .upsert_principal(&PrincipalInput {
@@ -845,6 +873,32 @@ impl SandboxArgs {
             workflow_host_principal: workflow_host.id,
             workflow_principal_registrar: WorkflowPrincipalRegistrar::new(client),
         })
+    }
+
+    /// Register every discovered tool's declared secrets as that tool's
+    /// `tool-<slug>` role. Runs after the infra role so tool discovery can
+    /// never block infra registration. A tool whose fragment iron-control
+    /// cannot represent fails startup loudly instead of silently dropping the
+    /// tool's secrets (discovery already skips unparseable tools with a
+    /// warning).
+    async fn sync_tool_roles(&self, client: &IronControlClient) -> Result<(), ServerError> {
+        let policy = self.iron_proxy.source_policy();
+        let tool_dirs = self.tool_proxy_dirs()?;
+        let tools = discover_tool_roles(&tool_dirs)?;
+        let assign_by_default = self
+            .iron_control_tool_roles_assign_by_default
+            .then_some(true);
+        for tool in &tools {
+            let mut spec = RoleSpec::tool(&tool.name);
+            spec.assign_by_default = assign_by_default;
+            register_role_with_retry(client, &spec, &tool.fragment, &policy).await?;
+        }
+        info!(
+            tool_role_count = tools.len(),
+            assign_by_default = assign_by_default.unwrap_or(false),
+            "registered iron-control tool roles"
+        );
+        Ok(())
     }
 
     fn persona_registry(&self) -> Result<PersonaRegistry, ServerError> {
@@ -3231,6 +3285,36 @@ mod tests {
         .unwrap();
 
         assert!(!args.sandbox.iron_control_sync_infra_secrets);
+    }
+
+    #[test]
+    fn iron_control_tool_secret_sync_defaults_off() {
+        let args = Args::try_parse_from([
+            "centaur-api-server",
+            "--database-url",
+            "postgres://postgres:postgres@localhost/centaur",
+        ])
+        .unwrap();
+
+        assert!(!args.sandbox.iron_control_sync_tool_secrets);
+        assert!(!args.sandbox.iron_control_tool_roles_assign_by_default);
+    }
+
+    #[test]
+    fn iron_control_tool_secret_sync_flags_parse() {
+        let args = Args::try_parse_from([
+            "centaur-api-server",
+            "--database-url",
+            "postgres://postgres:postgres@localhost/centaur",
+            "--iron-control-sync-tool-secrets",
+            "true",
+            "--iron-control-tool-roles-assign-by-default",
+            "true",
+        ])
+        .unwrap();
+
+        assert!(args.sandbox.iron_control_sync_tool_secrets);
+        assert!(args.sandbox.iron_control_tool_roles_assign_by_default);
     }
 
     #[test]
