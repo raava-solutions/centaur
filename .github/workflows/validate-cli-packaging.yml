@@ -2,7 +2,7 @@ name: Validate CLI Packaging
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feat/rust-production-cutover]
     paths:
       - .github/workflows/validate-cli-packaging.yml
       - scripts/validate_cli_packaging.py

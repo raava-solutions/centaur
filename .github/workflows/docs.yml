@@ -2,7 +2,7 @@ name: Docs
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feat/rust-production-cutover]
     paths:
       - .github/workflows/docs.yml
       - docs/**
@@ -26,7 +26,7 @@ permissions:
 jobs:
   build-and-deploy:
     name: Build and deploy docs
-    runs-on: depot-ubuntu-24.04-16
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-24.04"') }}
     timeout-minutes: 20
     strategy:
       matrix:

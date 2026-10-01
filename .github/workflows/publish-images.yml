@@ -46,7 +46,7 @@ jobs:
   # jobs so untrusted changes do not run on the hosted image builders.
   build:
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}
-    runs-on: ${{ matrix.platform == 'linux/arm64' && 'depot-ubuntu-24.04-arm-16' || 'depot-ubuntu-24.04-16' }}
+    runs-on: ${{ matrix.platform == 'linux/arm64' && fromJSON(vars.CI_RUNS_ON_ARM || '"ubuntu-24.04-arm"') || fromJSON(vars.CI_RUNS_ON || '"ubuntu-24.04"') }}
     strategy:
       fail-fast: false
       matrix:
@@ -165,7 +165,7 @@ jobs:
           retention-days: 1
 
   merge:
-    runs-on: depot-ubuntu-24.04-16
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-24.04"') }}
     needs: build
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}
     strategy:
