@@ -80,6 +80,12 @@ apiRs:
     <<: *release
   runMigrations: true
   syncInfraSecrets: true
+  # 1Password vault the registered tool-secret sources resolve op:// refs from
+  # (api-rs renders OP_VAULT; the binary default "ai-agents" does not exist in
+  # the Raava account). The RBE token and the other tool credentials live in
+  # Engineering — e.g. the RBE tool secret resolves
+  # op://Engineering/RBE_API_TOKEN/credential.
+  opVault: Engineering
   # Sized for the 8 GiB / 2 vCPU VM shared with console + postgres. Raise the
   # warm pool only after observing steady-state memory with console running.
   sandboxWarmPoolSize: 1
