@@ -1277,6 +1277,7 @@ A role is a reusable bundle of [grants](#grants) and Slack channel permissions. 
 | `foreign_id` | optional    | Globally unique. Immutable. Handy for idempotent provisioning. |
 | `name`       | optional    | |
 | `labels`     | optional    | |
+| `assign_by_default` | optional | When `true`, newly created principals are assigned this role (see [Principals](#principals)). Omitting the field leaves the current value unchanged; it never resets on an upsert that doesn't mention it. |
 | `slack_channel_permissions` | optional | Full replacement when present on create or update. Each row accepts `channel_id` and the `upload_enabled`, `download_enabled`, and `history_enabled` flags. |
 
 ### Operations
@@ -1310,7 +1311,7 @@ Returns `201`:
 | `GET`    | `/api/v1/roles/lookup/:foreign_id` | Fetch by foreign id. `404` if missing. |
 | `GET`    | `/api/v1/roles/:role_id/grants` | [List the grants](#list-by-grantee) attached to the role. |
 | `POST`   | `/api/v1/roles/:id/slack_channel_permissions` | Idempotently create or update one role-owned Slack channel permission without replacing other rows. Omitted flags default to enabled on create and remain unchanged on update. |
-| `PUT`/`PATCH` | `/api/v1/roles/:id` | [Upsert](#upsert-put--patch) by OID or `foreign_id`. `name`, `labels`, and `slack_channel_permissions` are mutable on an existing record; `foreign_id` applies only when creating. |
+| `PUT`/`PATCH` | `/api/v1/roles/:id` | [Upsert](#upsert-put--patch) by OID or `foreign_id`. `name`, `labels`, `assign_by_default`, and `slack_channel_permissions` are mutable on an existing record; `foreign_id` applies only when creating. |
 | `DELETE` | `/api/v1/roles/:id` | Delete. Returns `204`. Cascades: the role's grants and its assignments are removed. |
 
 ### Role assignments
