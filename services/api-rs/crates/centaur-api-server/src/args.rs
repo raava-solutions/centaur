@@ -2117,6 +2117,7 @@ impl IronProxyHarnessArgs {
             HarnessType::Codex,
             HarnessType::ClaudeCode,
             HarnessType::Amp,
+            HarnessType::Pi,
         ] {
             if harness_fragment_engine_name(&engine) == harness_fragment_engine_name(&self.engine) {
                 continue;
@@ -2188,6 +2189,7 @@ fn harness_fragment_engine_name(engine: &HarnessType) -> &'static str {
         HarnessType::ClaudeCode => "claude-code",
         HarnessType::Nanocodex => "codex",
         HarnessType::Hermes => "hermes",
+        HarnessType::Pi => "pi",
     }
 }
 
@@ -2208,6 +2210,9 @@ fn harness_auth_mode_env(engine: &HarnessType) -> Option<String> {
         // Hermes resolves providers through its own credential store /
         // iron-proxy placeholder injection; no dedicated auth-mode env.
         HarnessType::Hermes => None,
+        // Pi reads provider API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, ...)
+        // straight from the environment; no dedicated auth-mode env.
+        HarnessType::Pi => None,
     }
 }
 
@@ -3568,23 +3573,25 @@ mod tests {
     }
 
     #[test]
-    fn hermes_default_has_a_native_provider_proxy_fragment() {
+    fn pi_default_registers_anthropic_and_openai_placeholders() {
         let args = Args::try_parse_from([
             "centaur-api-server",
             "--database-url",
             "postgres://postgres:postgres@localhost/centaur",
             "--kubernetes-iron-proxy-harness-engine",
-            "hermes",
-            "--kubernetes-iron-proxy-harness-auth-mode",
-            "api_key",
+            "pi",
         ])
         .unwrap();
 
+        assert_eq!(args.sandbox.iron_proxy.harness.engine, HarnessType::Pi);
         let fragment = args.sandbox.iron_proxy.harness.fragment().unwrap();
         let placeholders = centaur_iron_proxy::placeholder_env(&[fragment]);
-        assert_eq!(
-            placeholders.get("NOUS_API_KEY").map(String::as_str),
-            Some("NOUS_API_KEY")
-        );
+        for name in ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"] {
+            assert_eq!(
+                placeholders.get(name).map(String::as_str),
+                Some(name),
+                "pi harness fragment should declare the {name} placeholder"
+            );
+        }
     }
 }

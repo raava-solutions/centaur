@@ -1,0 +1,104 @@
+# Using the Pi Harness
+
+Centaur can run [Pi](https://github.com/earendil-works/pi)
+(`@earendil-works/pi-coding-agent`, the successor to pi-mono) as a session
+harness alongside Codex, Claude Code, Amp, Nanocodex, and Hermes. Start a
+Slack thread with `--pi` (or set `pi` as a channel or deployment default via
+`sandbox.harnessEngine`) and the sandbox runs Pi instead of Codex.
+
+## How it works
+
+The sandbox image installs the pinned Pi CLI and the harness-server drives its
+long-lived **RPC mode** (`pi --mode rpc`):
+
+- One Pi child process per Centaur thread. Each turn is one JSONL `prompt`
+  command on stdin; stdout session events (`message_update` deltas, tool
+  execution lifecycle, `agent_settled`) are normalized into the shared
+  Codex app-server event stream, so Slack/Console rendering needs no
+  Pi-specific handling. `agent_settled` — Pi's guarantee that no automatic
+  work (retries, compaction recovery, queued steering) remains — terminates
+  the turn.
+- **Session continuity** comes from `--session-id`: Pi creates the session
+  file when missing and reloads it on a child respawn, so an interrupt (which
+  kills the child) does not lose conversational memory. With the persistent
+  state volume enabled, the entrypoint symlinks `~/.pi` into the state dir, so
+  Pi sessions also survive pod rescheduling.
+- **Steering** maps to Pi's `steer` command; an interrupt kills the child and
+  the next turn respawns it against the same session.
+- **Attachments**: images are inlined into the `prompt` command as base64
+  `images`; other attachment kinds degrade to text mentions, matching the
+  other harnesses.
+- Pi discovers the workspace `AGENTS.md` (the composed Centaur system prompt)
+  natively — no extra prompt wiring.
+
+## Configuration
+
+The entrypoint renders `~/.pi/agent/settings.json` from these variables
+(supply via `sandbox.extraEnv`):
+
+| Variable | Purpose |
+|---|---|
+| `PI_DEFAULT_PROVIDER` | Startup provider (default `anthropic`). |
+| `PI_DEFAULT_MODEL` | Startup model id (default `claude-sonnet-5`). Accepts Pi's `provider/id` form. harness-server passes the same value as `--model`, so the CLI flag and settings.json never disagree. |
+| `PI_DEFAULT_THINKING_LEVEL` | Startup thinking level (default `medium`). |
+| `PI_SETTINGS_OVERLAY` | JSON fragment deep-merged over the rendered settings.json (symmetric to `CLAUDE_SETTINGS_OVERLAY`). |
+| `PI_MODELS_JSON` | Full `models.json` content for custom/compatible endpoints (see below). |
+| `PI_BIN` | harness-server override for the `pi` binary (default: `pi` on PATH). |
+| `CENTAUR_PI_APP_BRIDGE_COMMAND` | Test hook replacing the spawned command entirely. |
+
+## Credentials
+
+Pi reads provider API keys straight from the environment
+(`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, …). Sandboxes receive only
+placeholder values; iron-proxy swaps the real credential on egress to
+`api.anthropic.com` / `api.openai.com` via the baked-in `pi` auth fragment
+(`harness_auth_fragment("pi", "api_key")`), which api-rs registers
+alongside the codex/claude-code fragments regardless of the configured
+default engine.
+
+## Custom (OpenAI-compatible) providers
+
+Pi connects to any OpenAI/Anthropic-compatible endpoint through
+`models.json`. Set `PI_MODELS_JSON` to a document whose provider `apiKey`
+uses Pi's `$ENV_VAR` interpolation naming a placeholder secret that
+iron-proxy already substitutes for that host — the same mechanism
+`codex.customProviders` registers. For example, a deployment with
+
+```yaml
+codex:
+  customProviders:
+    zap:
+      name: zap
+      baseUrl: https://glm-gateway.example.com/v1
+      apiKeyEnv: ZAP_API_KEY
+      defaultModel: glm-5-3-flash
+```
+
+can point Pi at the same gateway with no new secrets or proxy rules:
+
+```yaml
+sandbox:
+  extraEnv:
+    PI_DEFAULT_PROVIDER: zap
+    PI_DEFAULT_MODEL: glm-5-3-flash
+    PI_MODELS_JSON: |
+      {"providers": {"zap": {
+        "baseUrl": "https://glm-gateway.example.com/v1",
+        "api": "openai-completions",
+        "apiKey": "$ZAP_API_KEY",
+        "models": [{"id": "glm-5-3-flash", "contextWindow": 131072, "maxTokens": 8192}]
+      }}}
+```
+
+The sandbox holds only the `ZAP_API_KEY` placeholder; iron-proxy injects the
+real key for the zap host exactly as it does for Codex turns.
+
+## Making Pi the deployment default
+
+Set `sandbox.harnessEngine: pi` in your values file. This decides which
+harness warm sandboxes boot and which auth fragment is required at startup.
+Per-session sandboxes always run their session's harness via container args,
+and per-thread `--codex`/`--claude` flags keep working — the other
+harnesses' auth fragments stay registered. The sandbox image must be a build
+that ships the `harness-server pi` subcommand; flip the default only
+together with that image roll.

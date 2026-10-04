@@ -656,7 +656,7 @@ class Console::ThreadsControllerTest < ActionDispatch::IntegrationTest
   test "thread model label falls back to the deployment's model env override" do
     controller = Console::ThreadsController.new
 
-    with_env("CLAUDE_MODEL" => "claude-fable-5", "CODEX_MODEL" => "gpt-6") do
+    with_env("CLAUDE_MODEL" => "claude-fable-5", "CODEX_MODEL" => "gpt-6", "PI_DEFAULT_MODEL" => "claude-sonnet-5") do
       assert_equal "CLAUDE-FABLE-5", controller.send(
         :thread_model_label,
         TranscriptSession.new(metadata_hash: {}, harness_type: "claudecode")
@@ -664,6 +664,10 @@ class Console::ThreadsControllerTest < ActionDispatch::IntegrationTest
       assert_equal "GPT-6", controller.send(
         :thread_model_label,
         TranscriptSession.new(metadata_hash: {}, harness_type: "codex")
+      )
+      assert_equal "CLAUDE-SONNET-5", controller.send(
+        :thread_model_label,
+        TranscriptSession.new(metadata_hash: {}, harness_type: "pi")
       )
     end
   end

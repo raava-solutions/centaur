@@ -50,10 +50,11 @@ if [ -n "${TOOL_DIRS:-}" ]; then
 fi
 
 if [ -d "$STATE_DIR" ] && [ -w "$STATE_DIR" ]; then
-    mkdir -p "$STATE_DIR/workspace" "$STATE_DIR/uploads" "$STATE_DIR/branches" "$STATE_DIR/codex" "$STATE_DIR/claude"
-    rm -rf "$HOME_DIR/.codex" "$HOME_DIR/.claude" "$HOME_DIR/uploads" "$HOME_DIR/branches"
+    mkdir -p "$STATE_DIR/workspace" "$STATE_DIR/uploads" "$STATE_DIR/branches" "$STATE_DIR/codex" "$STATE_DIR/claude" "$STATE_DIR/pi"
+    rm -rf "$HOME_DIR/.codex" "$HOME_DIR/.claude" "$HOME_DIR/.pi" "$HOME_DIR/uploads" "$HOME_DIR/branches"
     ln -s "$STATE_DIR/codex" "$HOME_DIR/.codex"
     ln -s "$STATE_DIR/claude" "$HOME_DIR/.claude"
+    ln -s "$STATE_DIR/pi" "$HOME_DIR/.pi"
     ln -s "$STATE_DIR/uploads" "$HOME_DIR/uploads"
     ln -s "$STATE_DIR/branches" "$HOME_DIR/branches"
     export CENTAUR_PERSISTENT_STATE=1
@@ -372,16 +373,86 @@ case "$CLAUDE_CODE_AUTH_MODE" in
         ;;
 esac
 
-# ── Pi-mono settings ─────────────────────────────────────────────────────────
+# ── Pi settings ──────────────────────────────────────────────────────────────
+# pi (earendil-works/pi-coding-agent) reads ~/.pi/agent/settings.json for its
+# startup provider/model. PI_DEFAULT_PROVIDER / PI_DEFAULT_MODEL /
+# PI_DEFAULT_THINKING_LEVEL override the baked defaults; harness-server reads
+# PI_DEFAULT_MODEL for its --model flag, so the CLI flag and settings.json never
+# disagree. Auth is env-based: pi reads ANTHROPIC_API_KEY / OPENAI_API_KEY
+# placeholders and iron-proxy swaps the real credential on the wire.
 mkdir -p "$HOME_DIR/.pi/agent/extensions"
-cat > "$HOME_DIR/.pi/agent/settings.json" <<EOF
-{
-  "provider": "anthropic",
-  "model": "claude-sonnet-4-20250514",
-  "thinkingLevel": "medium",
-  "autoCompaction": true
+python3 - <<'PYEOF'
+import json
+import os
+
+path = os.path.expanduser("~/.pi/agent/settings.json")
+settings = {
+    "defaultProvider": os.environ.get("PI_DEFAULT_PROVIDER", "anthropic"),
+    "defaultModel": os.environ.get("PI_DEFAULT_MODEL", "claude-sonnet-5"),
+    "defaultThinkingLevel": os.environ.get("PI_DEFAULT_THINKING_LEVEL", "medium"),
+    "compaction": {"enabled": True},
 }
-EOF
+with open(path, "w") as f:
+    json.dump(settings, f, indent=2)
+    f.write("\n")
+PYEOF
+
+# PI_SETTINGS_OVERLAY: deep-merge an operator-supplied JSON fragment over the
+# baked settings.json (symmetric to CLAUDE_SETTINGS_OVERLAY). Unset is a no-op;
+# invalid JSON is ignored.
+if [ -n "${PI_SETTINGS_OVERLAY:-}" ]; then
+    PI_SETTINGS_PATH="$HOME_DIR/.pi/agent/settings.json" python3 - <<'PYEOF'
+import json
+import os
+import sys
+from pathlib import Path
+
+path = Path(os.environ["PI_SETTINGS_PATH"])
+try:
+    overlay = json.loads(os.environ["PI_SETTINGS_OVERLAY"])
+except json.JSONDecodeError as exc:
+    print(f"ignoring invalid PI_SETTINGS_OVERLAY: {exc}", file=sys.stderr)
+    sys.exit(0)
+existing = path.read_text() if path.exists() else ""
+base = json.loads(existing) if existing.strip() else {}
+
+def _deep_merge(b, o):
+    for key, value in o.items():
+        if isinstance(value, dict) and isinstance(b.get(key), dict):
+            _deep_merge(b[key], value)
+        else:
+            b[key] = value
+    return b
+
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(json.dumps(_deep_merge(base, overlay), indent=2) + "\n")
+PYEOF
+fi
+
+# PI_MODELS_JSON: full models.json content for custom/compatible endpoints
+# (OpenAI-compatible gateways, self-hosted models). `apiKey` values may use
+# pi's `$ENV_VAR` interpolation; name a placeholder env that iron-proxy
+# substitutes on the wire (e.g. the codex.customProviders registrations), so
+# no real key ever lands in the sandbox.
+if [ -n "${PI_MODELS_JSON:-}" ]; then
+    python3 - "$HOME_DIR/.pi/agent/models.json" <<'PYEOF'
+import json
+import os
+import sys
+
+try:
+    parsed = json.loads(os.environ["PI_MODELS_JSON"])
+except json.JSONDecodeError as exc:
+    print(f"ignoring invalid PI_MODELS_JSON: {exc}", file=sys.stderr)
+    sys.exit(0)
+if not isinstance(parsed, dict) or not isinstance(parsed.get("providers"), dict):
+    print("ignoring PI_MODELS_JSON: expected an object with a providers map", file=sys.stderr)
+    sys.exit(0)
+with open(sys.argv[1], "w") as f:
+    json.dump(parsed, f, indent=2)
+    f.write("\n")
+PYEOF
+fi
 
 # ── Per-session workspace clone (no shared worktree metadata) ────────────────
 if [ "${CENTAUR_PERSISTENT_STATE:-0}" = "1" ]; then

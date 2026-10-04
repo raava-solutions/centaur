@@ -177,6 +177,7 @@ pub fn harness_auth_fragment(engine: &str, auth_mode: &str) -> Result<Option<Pro
         ("meta-ai", "api_key") => META_AI_API_KEY_FRAGMENT,
         ("claude-code", "api_key") => CLAUDE_CODE_API_KEY_FRAGMENT,
         ("claude-code", "access_token") => CLAUDE_CODE_ACCESS_TOKEN_FRAGMENT,
+        ("pi", "api_key") => PI_API_KEY_FRAGMENT,
         _ => return Ok(None),
     };
     load_fragment_str(yaml).map(Some)
@@ -414,6 +415,32 @@ transforms:
             proxy_value: ANTHROPIC_API_KEY
             match_headers: ["X-Api-Key"]
           rules: [{ host: api.anthropic.com }]
+"#;
+
+// Pi reads provider API keys straight from the environment and calls the
+// provider hosts directly, so its fragment covers the two built-in providers
+// a deployment is expected to use. Custom OpenAI-compatible providers ride
+// the same hostname-scoped custom_provider_auth_fragments mechanism the codex
+// harness uses (pi's models.json `apiKey` interpolates the same placeholder
+// env): the proxy swaps the placeholder by host regardless of which harness
+// sent the request. Distinct secret ids keep this fragment's rules from
+// colliding with the codex/claude-code fragments that are always registered
+// alongside it.
+const PI_API_KEY_FRAGMENT: &str = r#"
+transforms:
+  - name: secrets
+    config:
+      secrets:
+        - id: PI_ANTHROPIC_API_KEY_AUTHORIZATION
+          replace:
+            proxy_value: ANTHROPIC_API_KEY
+            match_headers: ["X-Api-Key"]
+          rules: [{ host: api.anthropic.com }]
+        - id: PI_OPENAI_API_KEY_AUTHORIZATION
+          replace:
+            proxy_value: OPENAI_API_KEY
+            match_headers: ["Authorization"]
+          rules: [{ host: api.openai.com }]
 "#;
 
 // The `anthropic-claude` broker credential this references is managed by

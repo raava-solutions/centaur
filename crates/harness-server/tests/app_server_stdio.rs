@@ -19,6 +19,7 @@ enum Harness {
     ClaudeCode,
     Amp,
     Codex,
+    Pi,
 }
 
 impl Harness {
@@ -27,6 +28,7 @@ impl Harness {
             Self::ClaudeCode => "claude-code",
             Self::Amp => "amp",
             Self::Codex => "codex",
+            Self::Pi => "pi",
         }
     }
 
@@ -35,6 +37,7 @@ impl Harness {
             Self::ClaudeCode => &["claude-code", "--mode", "jsonrpc"],
             Self::Amp => &["amp", "--mode", "jsonrpc"],
             Self::Codex => &["codex", "--mode", "jsonrpc"],
+            Self::Pi => &["pi", "--mode", "jsonrpc"],
         }
     }
 
@@ -43,6 +46,7 @@ impl Harness {
             Self::ClaudeCode => &["claude-code"],
             Self::Amp => &["amp"],
             Self::Codex => &["codex"],
+            Self::Pi => &["pi"],
         }
     }
 
@@ -51,6 +55,7 @@ impl Harness {
             Self::ClaudeCode => Some("CENTAUR_CLAUDE_APP_BRIDGE_COMMAND"),
             Self::Amp => Some("CENTAUR_AMP_APP_BRIDGE_COMMAND"),
             Self::Codex => None,
+            Self::Pi => Some("CENTAUR_PI_APP_BRIDGE_COMMAND"),
         }
     }
 
@@ -66,6 +71,7 @@ impl Harness {
                 let model = std::env::var("AMP_MODE").unwrap_or_else(|_| "deep".to_string());
                 json!({ "model": model })
             }
+            Self::Pi => json!({}),
             Self::Codex => {
                 let mut params = json!({
                     "approvalPolicy": "never",
@@ -501,6 +507,114 @@ fn fake_amp_blocks_mode_accepts_user_blocks_by_default() {
     assert_completed_turn(&run.turn);
     assert_eq!(run.turn.text_from_deltas, "block amp");
     assert_codex_v2_turn(&run.turn);
+}
+
+#[test]
+fn fake_pi_blocks_mode_streams_deltas_and_completes_on_agent_settled() {
+    let fake_pi = fake_pi_rpc_script("pi blocks");
+
+    let run = run_blocks_turn(BridgeTurnConfig {
+        harness: Harness::Pi,
+        command_override: Some(fake_pi),
+        prompt: "say pi blocks".to_string(),
+        timeout: Duration::from_secs(10),
+    });
+
+    assert_completed_turn(&run.turn);
+    assert_eq!(run.turn.text_from_deltas, "pi blocks");
+    assert!(
+        run.turn.agent_delta_count > 1,
+        "pi text deltas should stream through as Codex deltas"
+    );
+    assert_codex_v2_turn(&run.turn);
+    assert!(
+        run.stdout_lines
+            .iter()
+            .all(|line| response_id(&serde_json::from_str(line).expect("JSON stdout")).is_none()),
+        "blocks mode should emit notifications only, not JSON-RPC responses"
+    );
+}
+
+#[test]
+fn fake_pi_process_is_started_once_across_two_turns() {
+    // The pi child is long-lived (RPC mode): the second turn must reuse it
+    // instead of respawning, so pi's in-memory session carries the context.
+    let start_log = temp_path("pi-harness-starts.log");
+    let command = format!(
+        "printf 'start\\n' >> {}; {}",
+        shell_quote(start_log.as_path()),
+        fake_pi_rpc_script("pi turn")
+    );
+
+    let mut bridge = BridgeProcess::spawn_harness_blocks(Harness::Pi, Some(command), None);
+    let first = bridge.run_blocks_user_turn("first", Duration::from_secs(10));
+    let second = bridge.run_blocks_user_turn("second", Duration::from_secs(10));
+    bridge.finish_successfully();
+
+    assert_completed_turn(&first);
+    assert_completed_turn(&second);
+    assert_eq!(first.text_from_deltas, "pi turn");
+    assert_eq!(second.text_from_deltas, "pi turn");
+
+    let starts = std::fs::read_to_string(&start_log).expect("read start log");
+    assert_eq!(
+        starts.lines().count(),
+        1,
+        "pi process should be spawned once per thread"
+    );
+    let _ = std::fs::remove_file(start_log);
+}
+
+#[test]
+fn fake_pi_blocks_mode_reports_message_error_as_turn_error() {
+    let command = concat!(
+        "while IFS= read -r _; do ",
+        "printf '%s\\n' ",
+        "'{\"type\":\"response\",\"command\":\"prompt\",\"success\":true,\"data\":{\"disposition\":\"started\"}}' ",
+        "'{\"type\":\"agent_start\"}' ",
+        "'{\"type\":\"message_start\",\"message\":{\"role\":\"assistant\",\"content\":[],\"stopReason\":\"pending\"}}' ",
+        "'{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"error\",\"errorMessage\":\"model overloaded\",\"content\":[]}}' ",
+        "'{\"type\":\"agent_end\",\"messages\":[],\"willRetry\":false}' ",
+        "'{\"type\":\"agent_settled\"}'; ",
+        "done"
+    );
+
+    let run = run_blocks_turn(BridgeTurnConfig {
+        harness: Harness::Pi,
+        command_override: Some(command.to_string()),
+        prompt: "fail please".to_string(),
+        timeout: Duration::from_secs(10),
+    });
+
+    assert_eq!(run.turn.terminal_status.as_deref(), Some("failed"));
+    assert_eq!(run.turn.terminal_error.as_deref(), Some("model overloaded"));
+}
+
+/// A fake `pi --mode rpc`: one loop iteration per `prompt` command, streaming
+/// two text deltas for `reply` and settling the run. The process stays alive
+/// for subsequent turns, like the real CLI.
+fn fake_pi_rpc_script(reply: &str) -> String {
+    let (first, second) = reply.split_at(reply.len() / 2);
+    format!(
+        concat!(
+            "while IFS= read -r _; do ",
+            "printf '%s\\n' ",
+            "'{{\"type\":\"response\",\"command\":\"prompt\",\"success\":true,\"data\":{{\"disposition\":\"started\"}}}}' ",
+            "'{{\"type\":\"agent_start\"}}' ",
+            "'{{\"type\":\"turn_start\"}}' ",
+            "'{{\"type\":\"message_start\",\"message\":{{\"role\":\"assistant\",\"content\":[],\"stopReason\":\"pending\"}}}}' ",
+            "'{{\"type\":\"message_update\",\"usage\":{{}},\"assistantMessageEvent\":{{\"type\":\"text_delta\",\"contentIndex\":0,\"delta\":\"{first}\"}}}}' ",
+            "'{{\"type\":\"message_update\",\"usage\":{{}},\"assistantMessageEvent\":{{\"type\":\"text_delta\",\"contentIndex\":0,\"delta\":\"{second}\"}}}}' ",
+            "'{{\"type\":\"message_end\",\"message\":{{\"role\":\"assistant\",\"stopReason\":\"stop\",\"content\":[{{\"type\":\"text\",\"text\":\"{reply}\"}}],\"usage\":{{\"input\":5,\"output\":2,\"cacheRead\":0,\"cacheWrite\":0,\"totalTokens\":7}}}}}}' ",
+            "'{{\"type\":\"turn_end\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"{reply}\"}}]}},\"toolResults\":[]}}' ",
+            "'{{\"type\":\"agent_end\",\"messages\":[],\"willRetry\":false}}' ",
+            "'{{\"type\":\"agent_settled\"}}'; ",
+            "done"
+        ),
+        first = first,
+        second = second,
+        reply = reply,
+    )
 }
 
 #[test]
@@ -1368,6 +1482,7 @@ impl BridgeProcess {
         for env_key in [
             "CENTAUR_CLAUDE_APP_BRIDGE_COMMAND",
             "CENTAUR_AMP_APP_BRIDGE_COMMAND",
+            "CENTAUR_PI_APP_BRIDGE_COMMAND",
             "CODEX_MODEL",
             "CODEX_MODEL_PROVIDER",
             "CODEX_FALLBACK_MODEL_PROVIDER",
@@ -2028,7 +2143,9 @@ fn run_native_anthropic(harness: Harness, prompt: &str, timeout: Duration) -> Na
             ]);
             command
         }
-        Harness::Codex => panic!("native anthropic runner does not support Codex"),
+        Harness::Codex | Harness::Pi => {
+            panic!("native anthropic runner does not support Codex or Pi")
+        }
     };
     command
         .stdin(Stdio::piped())
