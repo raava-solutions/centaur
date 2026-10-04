@@ -6926,6 +6926,17 @@ fn harness_thread_id_from_output_line(line: &str) -> Option<String> {
 }
 
 fn validate_input_lines(lines: &[String]) -> Result<(), SessionRuntimeError> {
+    // An execute with no input never reaches the harness: nothing is written
+    // to the sandbox stdin, so the turn never starts and the execution idles
+    // until max_duration_ms with zero output. Reject it here so the caller
+    // gets an immediate 400 instead of a silent stall.
+    if lines.is_empty() {
+        return Err(SessionRuntimeError::BadRequest(
+            "input_lines must contain at least one line; an execute with no input lines \
+             never reaches the harness and idles until max_duration_ms"
+                .to_owned(),
+        ));
+    }
     for (index, line) in lines.iter().enumerate() {
         if line.contains('\n') || line.contains('\r') {
             return Err(SessionRuntimeError::BadRequest(format!(
@@ -8480,6 +8491,26 @@ mod tests {
                 .args,
             vec!["harness-server", "claude-code"]
         );
+    }
+
+    #[test]
+    fn validate_input_lines_rejects_empty_execute() {
+        // Regression: an execute with zero input lines used to be accepted,
+        // cold-create a sandbox, write nothing to harness-server stdin, and
+        // idle with zero output until max_duration_ms (raava-zqr).
+        let error = validate_input_lines(&[]).expect_err("empty input_lines must be rejected");
+        assert!(
+            matches!(&error, SessionRuntimeError::BadRequest(message) if message.contains("at least one line")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn validate_input_lines_rejects_multiline_and_accepts_single_lines() {
+        let error = validate_input_lines(&["{\"type\":\"user\"}\nextra".to_owned()])
+            .expect_err("multiline input must be rejected");
+        assert!(matches!(error, SessionRuntimeError::BadRequest(_)));
+        validate_input_lines(&["{\"type\":\"user\"}".to_owned()]).expect("single line accepted");
     }
 
     #[test]

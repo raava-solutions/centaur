@@ -107,6 +107,9 @@ pub struct AppendMessagesResponse {
 pub struct ExecuteSessionRequest {
     pub idempotency_key: Option<String>,
     pub metadata: Option<Value>,
+    /// Opaque single-line NDJSON harness input. Must contain at least one
+    /// line: an execute with no input never reaches the harness and would
+    /// idle until `max_duration_ms` with zero output.
     #[serde(default)]
     pub input_lines: Vec<String>,
     pub idle_timeout_ms: Option<u64>,
