@@ -93,10 +93,10 @@ apiRs:
   image:
     repository: centaur-api-rs
     <<: *release
-    # api-rs runs the PR #5 build (iron-proxy upstream allowlist support);
-    # every other image stays on the release tag. Repin to a main-built tag
-    # after PR #5 merges and a fresh image is side-loaded.
-    tag: "0.1.139-b375f7f1"
+    # api-rs runs the wave-2 build (PR #14 empty-input_lines 400 rejection +
+    # PR #15 pi runtime support, carries migration 0055). Repin to a
+    # release tag once a full 0.1.141 image set is side-loaded.
+    tag: "0.1.141-90a244bb"
   runMigrations: true
   syncInfraSecrets: true
   # 1Password vault the registered tool-secret sources resolve op:// refs from
@@ -161,15 +161,15 @@ sandbox:
   image:
     repository: centaur-agent
     <<: *release
-    # Sandboxes run the 0.1.140-498059ba build (PR #10 codex fallback provider
-    # in harness-server); every other image stays on the release tag. Repin to
-    # the release tag once a full 0.1.140 image set is side-loaded.
-    tag: "0.1.140-498059ba"
+    # Sandboxes run the wave-2 build (PR #15: pi harness-server subcommand +
+    # pi CLI in the image). Repin to the release tag once a full 0.1.141
+    # image set is side-loaded.
+    tag: "0.1.141-90a244bb"
   # codex | amp | claudecode | pi. Must agree with the agent image's default CMD
   # and with the iron-proxy auth fragment api-rs registers. Flip to `pi` only
   # together with a sandbox image build that ships the pi harness-server
   # subcommand (see docs/pages/extend/pi-harness.mdx).
-  harnessEngine: codex
+  harnessEngine: pi
   codexAuthMode: access_token
   resources:
     requests:
