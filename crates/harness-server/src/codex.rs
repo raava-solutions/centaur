@@ -1014,7 +1014,11 @@ impl TurnGuard {
             return GuardStep::Forward(out);
         }
 
-        if streams_turn_output(&method) {
+        // The userMessage echo (item/started + item/completed for the client's
+        // own input) is not model output: real codex emits it before the model
+        // call, and counting it would disable the retry/fallback paths above on
+        // every real turn.
+        if streams_turn_output(&method) && !is_user_message_echo(&value) {
             self.streamed = true;
         }
         out.push(value);
@@ -1091,6 +1095,12 @@ fn is_system_error_status(value: &Value) -> bool {
 /// transparently retried.
 fn streams_turn_output(method: &str) -> bool {
     method.starts_with("item/") || method == "thread/tokenUsage/updated"
+}
+
+/// True for the userMessage echo codex emits at turn start (item/started and
+/// item/completed carrying the client's own input). Not model output.
+fn is_user_message_echo(value: &Value) -> bool {
+    value.pointer("/params/item/type").and_then(Value::as_str) == Some("userMessage")
 }
 
 fn is_server_request(value: &Value) -> bool {

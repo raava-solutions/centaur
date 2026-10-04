@@ -2601,6 +2601,11 @@ while IFS= read -r line; do
       n=$(grep -c '"method":"turn/start"' "$log")
       printf '{"id":%s,"result":{"turn":{"id":"turn-%s"}}}\n' "$id" "$n"
       printf '{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-%s","items":[],"itemsView":"full","status":"inProgress","error":null,"startedAt":1,"completedAt":null,"durationMs":null}}}\n' "$n"
+      # Real codex echoes the user message (item/started + item/completed with
+      # type userMessage) before the model call; the guard must not count it as
+      # streamed output, or the usage-limit fallback can never fire.
+      printf '%s\n' '{"method":"item/started","params":{"threadId":"thread-1","turnId":"turn-1","item":{"type":"userMessage","id":"user-1","content":[{"type":"text","text":"say codex blocks"}],"clientId":null},"startedAtMs":1}}'
+      printf '%s\n' '{"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1","item":{"type":"userMessage","id":"user-1","content":[{"type":"text","text":"say codex blocks"}],"clientId":null},"completedAtMs":1}}'
       if [ "$n" -eq 1 ]; then
         printf '{"method":"error","params":{"error":{"message":"The usage limit has been reached","codexErrorInfo":"usageLimitExceeded"},"willRetry":false,"threadId":"thread-1","turnId":"turn-1"}}\n'
       else
