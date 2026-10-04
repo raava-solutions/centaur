@@ -170,25 +170,24 @@ sandbox:
   # together with a sandbox image build that ships the pi harness-server
   # subcommand (see docs/pages/extend/pi-harness.mdx).
   #
-  # 2026-10-04: pi flip was deployed and verified end-to-end up to the LLM
-  # hop (pi RPC session, models.json, ZAP_API_KEY iron-proxy swap all good),
-  # but the zap GLM gateway host asus-trx50 was offline fleet-wide, so pi
-  # turns could not complete. Rolled back to codex until asus-trx50 returns;
-  # the flip is then a one-line change (pi image support is live).
-  harnessEngine: codex
+  # 2026-10-04: pi flip deployed on the 0.1.141-90a244bb image. First attempt
+  # used the zap GLM gateway, but asus-trx50 went offline fleet-wide, so pi
+  # defaults to OpenRouter instead (public egress, no tailnet dependency).
+  harnessEngine: pi
   codexAuthMode: access_token
   extraEnv:
-    # Pi (the default engine) runs on the zap GLM gateway — the same
-    # OpenAI-compatible provider the Codex fallback uses, so the iron-proxy
-    # credential registered from codex.customProviders covers it and no new
-    # secrets are needed. The sandbox holds only the ZAP_API_KEY placeholder;
-    # iron-proxy swaps the real key on the wire for the zap host.
-    # There is no ANTHROPIC_API_KEY item in the Engineering vault, so the
-    # anthropic default provider cannot authenticate — do not revert these
-    # without adding that credential or choosing another provider.
-    PI_DEFAULT_PROVIDER: zap
-    PI_DEFAULT_MODEL: glm-5-3-flash
-    PI_MODELS_JSON: '{"providers": {"zap": {"baseUrl": "https://asus-trx50.tailf55d56.ts.net/v1", "api": "openai-completions", "apiKey": "$ZAP_API_KEY", "models": [{"id": "glm-5-3-flash", "contextWindow": 131072, "maxTokens": 8192}]}}}'
+    # Pi (the default engine) talks to OpenRouter. The iron-proxy
+    # openrouter.ai fragment is registered by api-rs unconditionally
+    # (harness_auth_fragment("openrouter","api_key")), so no chart or proxy
+    # change is needed: the sandbox holds only the OPENROUTER_API_KEY
+    # placeholder and iron-proxy swaps the real key from
+    # op://Engineering/OPENROUTER_API_KEY/credential on the wire. Model is the
+    # OpenRouter slug; change anytime via PI_DEFAULT_MODEL.
+    # NOTE: there is no ANTHROPIC_API_KEY/OPENAI_API_KEY item in the
+    # Engineering vault, so pi's anthropic/openai default providers cannot
+    # authenticate — keep this override.
+    PI_DEFAULT_PROVIDER: openrouter
+    PI_DEFAULT_MODEL: anthropic/claude-sonnet-4.5
   resources:
     requests:
       cpu: 100m
