@@ -15,10 +15,14 @@ Neither workflow touches a cluster. No deploy workflow exists on `main` at all;
 
 Two things break the tag-to-production path:
 
-1. **Namespace.** `publish-images.yml` line 31 hard-codes
-   `IMAGE_NAMESPACE: paradigmxyz/centaur`. Those are upstream's packages. A Raava
-   build cannot push to them, and Raava's production must not pull from them,
-   because an upstream tag would then be a production deploy of unreviewed code.
+1. **Namespace.** `publish-images.yml` reads `IMAGE_NAMESPACE` (and
+   `IMAGE_REGISTRY` / `IMAGE_SOURCE_URL` / `DEPOT_PROJECT_ID`) from repository
+   variables, defaulting to upstream's `paradigmxyz/centaur`. A Raava build
+   cannot push to upstream's packages, and Raava's production must not pull
+   from them, because an upstream tag would then be a production deploy of
+   unreviewed code. Until the Raava variables are set, the fork keeps
+   `IMAGE_PUBLISH_DISABLED=true` so pushes to `main` skip the workflow instead
+   of failing against upstream's Depot project.
 2. **Image naming.** Production runs bare-name images that CI never produces:
    `centaur-api-slack-hermes-f8663481`, `centaur-slackbot-...`. They were built
    locally, exported with `docker save`, copied to the VM, and imported with
@@ -43,12 +47,13 @@ Step 4 is the step that should not survive. Everything else is a normal release.
 
 ## Closing the gap
 
-**Phase 1 — Raava-owned images.** Override `IMAGE_NAMESPACE` to
-`raava-solutions/centaur` on the fork (make it a `vars.` lookup so upstream stays
-default) and create the four packages with a fine-grained PAT that has
-`write:packages`. Set the packages public, or ship an `imagePullSecret` and
-reference it from the chart's `imagePullSecrets`. This alone makes a CI tag build
-meaningful.
+**Phase 1 — Raava-owned images.** Set the repository variables
+`IMAGE_NAMESPACE=raava-solutions/centaur` (plus `IMAGE_REGISTRY`,
+`IMAGE_SOURCE_URL`, and `DEPOT_PROJECT_ID` pointing at a Raava Depot project),
+create the four packages with a fine-grained PAT that has `write:packages`, and
+remove `IMAGE_PUBLISH_DISABLED`. Set the packages public, or ship an
+`imagePullSecret` and reference it from the chart's `imagePullSecrets`. This
+alone makes a CI tag build meaningful.
 
 **Phase 2 — one deploy step.** Register a self-hosted GitHub Actions runner on the
 k3s VM and add `deploy-production.yml`: trigger on `workflow_dispatch` plus `v*`
