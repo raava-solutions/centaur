@@ -30,9 +30,13 @@ permissions:
   packages: write
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAMESPACE: paradigmxyz/centaur
-  IMAGE_SOURCE: https://github.com/paradigmxyz/centaur
+  # Forks override these via repository variables (Settings > Secrets and
+  # variables > Actions > Variables) to publish under their own namespace
+  # and builder. Unset vars keep upstream's destinations.
+  REGISTRY: ${{ vars.IMAGE_REGISTRY || 'ghcr.io' }}
+  IMAGE_NAMESPACE: ${{ vars.IMAGE_NAMESPACE || 'paradigmxyz/centaur' }}
+  IMAGE_SOURCE: ${{ vars.IMAGE_SOURCE_URL || 'https://github.com/paradigmxyz/centaur' }}
+  DEPOT_PROJECT: ${{ vars.DEPOT_PROJECT_ID || 'd8qqlh1bmq' }}
   # Main/tags keep optimized release images. PRs and manual branch publishes
   # use debug builds so staging/dev iteration does not spend minutes optimizing
   # Rust binaries that are immediately replaced by the next test build.
@@ -45,7 +49,9 @@ jobs:
   # dispatch builds stay amd64-only to keep iteration fast. Fork PRs skip both
   # jobs so untrusted changes do not run on the hosted image builders.
   build:
-    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}
+    # Set repository variable IMAGE_PUBLISH_DISABLED=true to skip publishing
+    # entirely (e.g. a fork whose registry/builder is not provisioned yet).
+    if: ${{ vars.IMAGE_PUBLISH_DISABLED != 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) }}
     runs-on: ${{ matrix.platform == 'linux/arm64' && fromJSON(vars.CI_RUNS_ON_ARM || '"ubuntu-24.04-arm"') || fromJSON(vars.CI_RUNS_ON || '"ubuntu-24.04"') }}
     strategy:
       fail-fast: false
@@ -135,7 +141,7 @@ jobs:
         id: build
         uses: depot/build-push-action@98e78adca7817480b8185f474a400b451d74e287 # v1.18.0
         with:
-          project: d8qqlh1bmq
+          project: ${{ env.DEPOT_PROJECT }}
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           target: ${{ matrix.target }}
@@ -167,7 +173,7 @@ jobs:
   merge:
     runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-24.04"') }}
     needs: build
-    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}
+    if: ${{ vars.IMAGE_PUBLISH_DISABLED != 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) }}
     strategy:
       fail-fast: false
       matrix:
