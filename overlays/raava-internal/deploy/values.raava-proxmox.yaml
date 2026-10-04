@@ -169,7 +169,13 @@ sandbox:
   # and with the iron-proxy auth fragment api-rs registers. Flip to `pi` only
   # together with a sandbox image build that ships the pi harness-server
   # subcommand (see docs/pages/extend/pi-harness.mdx).
-  harnessEngine: pi
+  #
+  # 2026-10-04: pi flip was deployed and verified end-to-end up to the LLM
+  # hop (pi RPC session, models.json, ZAP_API_KEY iron-proxy swap all good),
+  # but the zap GLM gateway host asus-trx50 was offline fleet-wide, so pi
+  # turns could not complete. Rolled back to codex until asus-trx50 returns;
+  # the flip is then a one-line change (pi image support is live).
+  harnessEngine: codex
   codexAuthMode: access_token
   extraEnv:
     # Pi (the default engine) runs on the zap GLM gateway — the same
