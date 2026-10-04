@@ -165,8 +165,10 @@ sandbox:
     # in harness-server); every other image stays on the release tag. Repin to
     # the release tag once a full 0.1.140 image set is side-loaded.
     tag: "0.1.140-498059ba"
-  # codex | amp | claudecode. Must agree with the agent image's default CMD
-  # and with the iron-proxy auth fragment api-rs registers.
+  # codex | amp | claudecode | pi. Must agree with the agent image's default CMD
+  # and with the iron-proxy auth fragment api-rs registers. Flip to `pi` only
+  # together with a sandbox image build that ships the pi harness-server
+  # subcommand (see docs/pages/extend/pi-harness.mdx).
   harnessEngine: codex
   codexAuthMode: access_token
   resources:

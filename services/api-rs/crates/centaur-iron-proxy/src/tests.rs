@@ -60,6 +60,23 @@ fn harness_auth_fragments_are_baked_in() {
         Some("ANTHROPIC_API_KEY")
     );
 
+    let pi = harness_auth_fragment("pi", "api_key").unwrap().unwrap();
+    let pi_hosts: Vec<&str> = pi.transforms[0]
+        .config
+        .secrets
+        .iter()
+        .filter_map(|secret| secret.rules[0]["host"].as_str())
+        .collect();
+    assert_eq!(pi_hosts, ["api.anthropic.com", "api.openai.com"]);
+    let pi_placeholders = placeholder_env(&[pi]);
+    for name in ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"] {
+        assert_eq!(
+            pi_placeholders.get(name).map(String::as_str),
+            Some(name),
+            "pi fragment should declare the {name} placeholder"
+        );
+    }
+
     assert!(harness_auth_fragment("codex", "bogus").unwrap().is_none());
 
     let infra = infra_fragment().unwrap();

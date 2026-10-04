@@ -21,6 +21,9 @@ enum CliCommand {
     #[command(alias = "claude")]
     ClaudeCode(HarnessCommand),
     Amp(HarnessCommand),
+    /// Drive the pi coding agent's long-lived RPC mode (one child per thread;
+    /// `--session-id` keeps session continuity across child respawns).
+    Pi(HarnessCommand),
     /// Run Nanocodex directly as a library and stream its native typed events.
     Nanocodex,
     /// Drive Hermes Agent's long-lived JSON-RPC gateway (sessions, memory,
@@ -58,6 +61,7 @@ fn run() -> Result<()> {
         CliCommand::Codex(command) => run_mode(HarnessKind::Codex, command.mode),
         CliCommand::ClaudeCode(command) => run_mode(HarnessKind::ClaudeCode, command.mode),
         CliCommand::Amp(command) => run_mode(HarnessKind::Amp, command.mode),
+        CliCommand::Pi(command) => run_mode(HarnessKind::Pi, command.mode),
         CliCommand::Nanocodex => run_nanocodex_blocks_server(),
         CliCommand::Hermes => run_hermes_blocks_server(),
         CliCommand::ValidateJsonrpc => run_validate_jsonrpc(),

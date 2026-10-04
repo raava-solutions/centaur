@@ -75,7 +75,8 @@ class Console::ThreadsController < ApplicationController
   # the chart. Amp has no fixed default model, so it is intentionally absent.
   HARNESS_DEFAULT_MODEL_ENVS = {
     "claudecode" => "CLAUDE_MODEL",
-    "codex" => "CODEX_MODEL"
+    "codex" => "CODEX_MODEL",
+    "pi" => "PI_DEFAULT_MODEL"
   }.freeze
   # Harness config files carrying each harness's baked-in default model, used
   # when no env override is set. Resolved against CENTAUR_HARNESS_CONFIG_DIR
