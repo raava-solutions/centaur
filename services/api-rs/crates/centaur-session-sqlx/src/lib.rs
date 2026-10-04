@@ -560,6 +560,29 @@ impl PgSessionStore {
         row.map(TryInto::try_into).transpose()
     }
 
+    /// Fetch the execution recorded for a (thread, idempotency key) pair, if
+    /// any. Used to replay an idempotent execute retry that carries only the
+    /// key before payload validation runs.
+    pub async fn execution_for_idempotency_key(
+        &self,
+        thread_key: &ThreadKey,
+        idempotency_key: &str,
+    ) -> Result<Option<SessionExecution>, SessionStoreError> {
+        let row = sqlx::query_as::<_, SessionExecutionRow>(
+            r#"
+            select execution_id, idempotency_key, thread_key, status, metadata, error, created_at, updated_at, started_at, completed_at
+            from session_executions
+            where thread_key = $1 and idempotency_key = $2
+            "#,
+        )
+        .bind(thread_key.as_str())
+        .bind(idempotency_key)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(TryInto::try_into).transpose()
+    }
+
     pub async fn mark_execution_running(
         &self,
         execution_id: &str,

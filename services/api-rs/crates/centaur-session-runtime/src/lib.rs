@@ -2342,6 +2342,37 @@ impl SessionRuntime {
             return Err(SessionRuntimeError::ShuttingDown);
         }
         self.store.get_session(thread_key).await?;
+        if input.input_lines.is_empty() {
+            // An execute with no input never reaches the harness: nothing is
+            // written to the sandbox stdin, so the turn never starts and the
+            // execution idles until max_duration_ms with zero output. Reject
+            // it here, before any execution row or sandbox exists — but honor
+            // the idempotency contract first: a retry that carries only the
+            // key (and no payload) must replay the existing execution.
+            if let Some(idempotency_key) = input.idempotency_key.as_deref()
+                && let Some(execution) = self
+                    .store
+                    .execution_for_idempotency_key(thread_key, idempotency_key)
+                    .await?
+            {
+                if execution.status == ExecutionStatus::Queued {
+                    let persisted_input = self
+                        .load_persisted_execute_request(&execution.execution_id)
+                        .await?;
+                    self.spawn_session_execution(
+                        thread_key.clone(),
+                        execution.execution_id.clone(),
+                        persisted_input,
+                    );
+                }
+                return Ok(execution);
+            }
+            return Err(SessionRuntimeError::BadRequest(
+                "input_lines must contain at least one line; an execute with no input lines \
+                 never reaches the harness and idles until max_duration_ms"
+                    .to_owned(),
+            ));
+        }
         validate_input_lines(&input.input_lines)?;
         let _ = duration_options(input.idle_timeout_ms, input.max_duration_ms)?;
 
@@ -6926,6 +6957,17 @@ fn harness_thread_id_from_output_line(line: &str) -> Option<String> {
 }
 
 fn validate_input_lines(lines: &[String]) -> Result<(), SessionRuntimeError> {
+    // An execute with no input never reaches the harness: nothing is written
+    // to the sandbox stdin, so the turn never starts and the execution idles
+    // until max_duration_ms with zero output. Reject it here so the caller
+    // gets an immediate 400 instead of a silent stall.
+    if lines.is_empty() {
+        return Err(SessionRuntimeError::BadRequest(
+            "input_lines must contain at least one line; an execute with no input lines \
+             never reaches the harness and idles until max_duration_ms"
+                .to_owned(),
+        ));
+    }
     for (index, line) in lines.iter().enumerate() {
         if line.contains('\n') || line.contains('\r') {
             return Err(SessionRuntimeError::BadRequest(format!(
@@ -8483,6 +8525,26 @@ mod tests {
     }
 
     #[test]
+    fn validate_input_lines_rejects_empty_execute() {
+        // Regression: an execute with zero input lines used to be accepted,
+        // cold-create a sandbox, write nothing to harness-server stdin, and
+        // idle with zero output until max_duration_ms (raava-zqr).
+        let error = validate_input_lines(&[]).expect_err("empty input_lines must be rejected");
+        assert!(
+            matches!(&error, SessionRuntimeError::BadRequest(message) if message.contains("at least one line")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn validate_input_lines_rejects_multiline_and_accepts_single_lines() {
+        let error = validate_input_lines(&["{\"type\":\"user\"}\nextra".to_owned()])
+            .expect_err("multiline input must be rejected");
+        assert!(matches!(error, SessionRuntimeError::BadRequest(_)));
+        validate_input_lines(&["{\"type\":\"user\"}".to_owned()]).expect("single line accepted");
+    }
+
+    #[test]
     fn input_line_with_session_context_enriches_json_objects() {
         let thread_key = ThreadKey::parse("chat:C123:1780000000.000000").unwrap();
         let trace = SessionTraceContext::new(None, None);
@@ -9521,6 +9583,93 @@ mod adoption_tests {
             .expect("execution exists");
         assert_eq!(latest.execution_id, execution.execution_id);
         assert_eq!(latest.status, ExecutionStatus::Completed);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn enqueue_rejects_empty_input_lines_but_replays_by_idempotency_key() {
+        let Some(store) = test_store().await else {
+            return;
+        };
+        let _serial = TEST_LOCK.lock().await;
+        let thread_key =
+            ThreadKey::parse(format!("test:enqueue-replay-{}", uuid::Uuid::new_v4())).unwrap();
+        store
+            .create_or_get_session(
+                &thread_key,
+                &HarnessType::Codex,
+                None,
+                json!({}),
+                Default::default(),
+            )
+            .await
+            .expect("create session");
+
+        let backend = Arc::new(MockBackend::new(SandboxStatus::Running, Vec::new()));
+        let create_gate = backend.hold_create();
+        let (io, mut stdout, _stdin) = mock_io();
+        backend.push_io(io).await;
+        let runtime = runtime_with(&store, backend.clone());
+        let input = ExecuteSessionInput {
+            idempotency_key: Some("replay-key".to_owned()),
+            metadata: None,
+            input_lines: vec![
+                json!({
+                    "type": "user",
+                    "message": {"content": [{"type": "text", "text": "queue me"}]}
+                })
+                .to_string(),
+            ],
+            idle_timeout_ms: None,
+            max_duration_ms: None,
+        };
+        let execution = runtime
+            .enqueue_session_execution(&thread_key, input)
+            .await
+            .expect("enqueue execution");
+        assert_eq!(execution.status, ExecutionStatus::Queued);
+
+        // A retry carrying only the idempotency key (no payload) must replay
+        // the existing execution, not fail payload validation.
+        let replay = runtime
+            .enqueue_session_execution(
+                &thread_key,
+                ExecuteSessionInput {
+                    idempotency_key: Some("replay-key".to_owned()),
+                    metadata: None,
+                    input_lines: Vec::new(),
+                    idle_timeout_ms: None,
+                    max_duration_ms: None,
+                },
+            )
+            .await
+            .expect("idempotent replay with no input lines");
+        assert_eq!(replay.execution_id, execution.execution_id);
+
+        // An empty execute with no matching execution is rejected before any
+        // row or sandbox is created (raava-zqr).
+        let rejected = runtime
+            .enqueue_session_execution(
+                &thread_key,
+                ExecuteSessionInput {
+                    idempotency_key: None,
+                    metadata: None,
+                    input_lines: Vec::new(),
+                    idle_timeout_ms: None,
+                    max_duration_ms: None,
+                },
+            )
+            .await;
+        assert!(
+            matches!(rejected, Err(SessionRuntimeError::BadRequest(_))),
+            "empty input_lines without a matching idempotency key must be rejected"
+        );
+
+        create_gate.notify_one();
+        stdout
+            .write_all(&completed_output_bytes("done."))
+            .await
+            .expect("write terminal output");
+        wait_for_event(&store, &thread_key, "session.execution_completed").await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
