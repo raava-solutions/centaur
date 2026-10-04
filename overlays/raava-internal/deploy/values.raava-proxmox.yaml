@@ -161,10 +161,10 @@ sandbox:
   image:
     repository: centaur-agent
     <<: *release
-    # Sandboxes run the wave-2 build (PR #15: pi harness-server subcommand +
-    # pi CLI in the image). Repin to the release tag once a full 0.1.141
-    # image set is side-loaded.
-    tag: "0.1.141-90a244bb"
+    # Sandboxes run the wave-2 build + PR #16 (codex usage-limit fallback no
+    # longer disabled by the userMessage echo). Repin to the release tag once
+    # a full 0.1.141 image set is side-loaded.
+    tag: "0.1.141-c7973d3f"
   # codex | amp | claudecode | pi. Must agree with the agent image's default CMD
   # and with the iron-proxy auth fragment api-rs registers. Flip to `pi` only
   # together with a sandbox image build that ships the pi harness-server
