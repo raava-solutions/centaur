@@ -188,6 +188,13 @@ sandbox:
     # authenticate — keep this override.
     PI_DEFAULT_PROVIDER: openrouter
     PI_DEFAULT_MODEL: anthropic/claude-sonnet-4.5
+    # Pin the openrouter provider to OpenRouter's OpenAI-compatible endpoint.
+    # Without this, pi picks the Anthropic messages shape for anthropic/*
+    # model ids (POST /api/v1/messages with x-api-key), but the iron-proxy
+    # fragment swaps the Authorization header — forcing openai-completions
+    # keeps the request on /api/v1/chat/completions with a Bearer header the
+    # proxy can replace.
+    PI_MODELS_JSON: '{"providers": {"openrouter": {"baseUrl": "https://openrouter.ai/api/v1", "api": "openai-completions", "apiKey": "$OPENROUTER_API_KEY", "models": [{"id": "anthropic/claude-sonnet-4.5", "contextWindow": 200000, "maxTokens": 64000}]}}}'
   resources:
     requests:
       cpu: 100m
