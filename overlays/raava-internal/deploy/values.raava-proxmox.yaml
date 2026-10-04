@@ -171,6 +171,18 @@ sandbox:
   # subcommand (see docs/pages/extend/pi-harness.mdx).
   harnessEngine: pi
   codexAuthMode: access_token
+  extraEnv:
+    # Pi (the default engine) runs on the zap GLM gateway — the same
+    # OpenAI-compatible provider the Codex fallback uses, so the iron-proxy
+    # credential registered from codex.customProviders covers it and no new
+    # secrets are needed. The sandbox holds only the ZAP_API_KEY placeholder;
+    # iron-proxy swaps the real key on the wire for the zap host.
+    # There is no ANTHROPIC_API_KEY item in the Engineering vault, so the
+    # anthropic default provider cannot authenticate — do not revert these
+    # without adding that credential or choosing another provider.
+    PI_DEFAULT_PROVIDER: zap
+    PI_DEFAULT_MODEL: glm-5-3-flash
+    PI_MODELS_JSON: '{"providers": {"zap": {"baseUrl": "https://asus-trx50.tailf55d56.ts.net/v1", "api": "openai-completions", "apiKey": "$ZAP_API_KEY", "models": [{"id": "glm-5-3-flash", "contextWindow": 131072, "maxTokens": 8192}]}}}'
   resources:
     requests:
       cpu: 100m
