@@ -74,6 +74,7 @@ import { createFlagMessageOverridesStrategy } from './message-overrides-strategy
 import {
   isAllowedSlackMessage,
   isAllowedSlackWebhookBody,
+  isBotAuthoredSlackMessage,
   parseSlackWebhookPayload
 } from './slack-events'
 import { isSlackStopCommand } from './stop-command'
@@ -492,14 +493,21 @@ export function createSlackbotV2(options: SlackbotV2Options): SlackbotV2 {
   chat.onSubscribedMessage(async (thread, message) => {
     if (!(await isAllowedSlackMessage(message, options, logger))) return
     if (slackRichTextMentionsUser(message.raw, options.botUserId)) message.isMention = true
+    let trigger = 'subscribed_message'
     if (message.isMention !== true) {
-      traceLog(
-        options,
-        'slackbotv2_subscribed_message_without_mention_ignored',
-        createHandoffTrace(thread, message, 'append'),
-        { trigger: 'subscribed_message' }
-      )
-      return
+      if (!(await isSlackSessionThreadFollowUp(thread, message))) {
+        traceLog(
+          options,
+          'slackbotv2_subscribed_message_without_mention_ignored',
+          createHandoffTrace(thread, message, 'append'),
+          { trigger: 'subscribed_message' }
+        )
+        return
+      }
+      // A human follow-up in a thread that already maps to a centaur session
+      // is a turn in that session: route it exactly like a mention.
+      message.isMention = true
+      trigger = 'thread_followup'
     }
     lateSlackFiles.rememberFilelessMention(thread, message)
     await handleSlackMessageHandoff(thread, message, {
@@ -508,7 +516,7 @@ export function createSlackbotV2(options: SlackbotV2Options): SlackbotV2 {
       options,
       state,
       steeringReactions,
-      trigger: 'subscribed_message'
+      trigger
     })
   })
 
@@ -3357,6 +3365,28 @@ function isSlackThreadReply(message: ChatMessage): boolean {
   const threadTs = typeof item.thread_ts === 'string' ? item.thread_ts : ''
   const ts = typeof item.ts === 'string' ? item.ts : message.id
   return Boolean(threadTs && ts && threadTs !== ts)
+}
+
+/**
+ * True when a non-mention message in a subscribed thread is a human follow-up
+ * in a thread the bot is already participating in. Participation means the
+ * Slack thread (thread.id is the session thread_key) has an established
+ * centaur session in local state: an active execution, at least one completed
+ * execution handoff, or forwarded history. Bots never qualify — including
+ * allowlisted trigger bots — they still need an explicit mention.
+ */
+async function isSlackSessionThreadFollowUp(
+  thread: Thread<SlackbotV2ThreadState>,
+  message: ChatMessage
+): Promise<boolean> {
+  if (isBotAuthoredSlackMessage(message)) return false
+  const state = await thread.state
+  if (!state) return false
+  return (
+    state.activeExecution === true ||
+    (state.executedMessageIds?.length ?? 0) > 0 ||
+    state.historyForwarded === true
+  )
 }
 
 async function collectSlackThreadContext(

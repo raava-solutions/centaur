@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import type { Logger, Message } from 'chat'
-import { isAllowedSlackMessage } from '../src/slack-events'
+import { isAllowedSlackMessage, isBotAuthoredSlackMessage } from '../src/slack-events'
 import type { SlackbotV2Options } from '../src/types'
 
 const logger: Logger = {
@@ -113,5 +113,30 @@ describe('Slack trigger bot allowlist', () => {
 
     expect(await isAllowedSlackMessage(botMessage('BCHANNELBOT'), config, logger)).toBe(false)
     expect(requests).toBe(0)
+  })
+})
+
+describe('isBotAuthoredSlackMessage', () => {
+  it('detects bot authorship from the author flag and raw event markers', () => {
+    expect(isBotAuthoredSlackMessage(botMessage('BCHANNELBOT'))).toBe(true)
+    expect(
+      isBotAuthoredSlackMessage({
+        author: { isBot: false },
+        id: '1700000000.000002',
+        raw: { bot_profile: { id: 'BPROFILE' } },
+        threadId: 'C1:1700000000.000001'
+      } as Message)
+    ).toBe(true)
+  })
+
+  it('treats plain human messages as human-authored', () => {
+    expect(
+      isBotAuthoredSlackMessage({
+        author: { isBot: false },
+        id: '1700000000.000003',
+        raw: { user: 'USLACKBOTV2USER' },
+        threadId: 'C1:1700000000.000001'
+      } as Message)
+    ).toBe(false)
   })
 })
