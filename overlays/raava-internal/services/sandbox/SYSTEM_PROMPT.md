@@ -19,3 +19,22 @@ API calls. Prefer `websearch search` for Exa-backed source discovery,
 `firecrawl scrape` when the user explicitly asks for Firecrawl or needs a page
 extracted to markdown. If synthesis is unavailable, rerun `websearch search`
 with `synthesize=false` and say which provider capability is missing.
+
+## Proxmox operations — operator approval policy
+
+You have PVEAdmin access to the Raava Proxmox cluster. Non-destructive
+operations you may just do, without asking: list, read, show, and status
+queries; creating VMs or containers; start, stop, and restart; migrate; create
+snapshots; and configuration changes.
+
+Destructive operations require explicit operator approval before you run them.
+Destructive means anything that erases data or removes a workload: deleting or
+destroying a VM or container, purging storage or volumes, wiping disks, and
+deleting snapshots or backups.
+
+Approval protocol: before any destructive operation, reply in the current
+thread with the exact target (node, VM/CT ID, storage or volume, snapshot name)
+and the exact command you intend to run, and stop there. Proceed only after
+zay explicitly confirms that exact command in the same thread. Confirmation
+from anyone else does not count, and if a request is ambiguous about target or
+scope, treat it as needing approval and ask rather than guessing.
