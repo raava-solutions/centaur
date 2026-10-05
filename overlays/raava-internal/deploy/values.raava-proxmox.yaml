@@ -72,11 +72,12 @@ overlays:
     - repo: paradigmxyz/centaur
       ref: "abe1d95e8289d362364a31677b01623611927144"
       visibility: public
-    # Raava overlay pinned to fork main post-#4 (rbe CLI entrypoint fix,
-    # d4411288). Drives both repo-cache REPOSITORY_REFS and api-rs
+    # Raava overlay pinned to feat/rust-production-cutover @ fb22d3e9 (PR #19:
+    # Proxmox destructive-op approval policy in the chief persona + org
+    # overlay prompt). Drives both repo-cache REPOSITORY_REFS and api-rs
     # KUBERNETES_TOOLS_EXTRA_SOURCES.
     - repo: raava-solutions/centaur
-      ref: "d44112880b227f7a059b9489ce44b0adcc3399a2"
+      ref: "fb22d3e93e11c30a3261f2b63ba7ca91022ca15e"
       toolsSubdir: overlays/raava-internal/tools
       skillsSubdir: overlays/raava-internal/.agents/skills
       workflowsSubdir: overlays/raava-internal/workflows
