@@ -173,6 +173,17 @@ function isBotAuthoredSlackEvent(event: RawSlackEvent): boolean {
   return Boolean(event.bot_id || event.bot_profile || event.subtype === 'bot_message')
 }
 
+/**
+ * True when the message was authored by any bot (including this one). Unlike
+ * `isAllowedSlackMessage` this ignores the trigger-bot allowlist: follow-up
+ * turns in subscribed threads are reserved for humans; bots still need an
+ * explicit mention.
+ */
+export function isBotAuthoredSlackMessage(message: Message): boolean {
+  const raw = isRawSlackEvent(message.raw) ? message.raw : undefined
+  return message.author.isBot === true || (raw ? isBotAuthoredSlackEvent(raw) : false)
+}
+
 function isRawSlackInteraction(value: unknown): value is RawSlackInteraction {
   return isJsonObject(value)
 }
