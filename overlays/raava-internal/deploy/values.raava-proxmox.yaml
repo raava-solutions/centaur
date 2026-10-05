@@ -127,6 +127,10 @@ slackbotv2:
   image:
     repository: centaur-slackbotv2
     <<: *release
+    # Slackbotv2 runs the PR #18 build (human thread follow-ups without a
+    # re-mention). Explicit tag rather than the x-release anchor: the anchor is
+    # shared with centaur-iron-proxy, which has no 0.1.141-* side-loaded build.
+    tag: "0.1.141-65ca83f4"
   userName: centaur
   resources:
     requests:
