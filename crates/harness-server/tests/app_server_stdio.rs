@@ -760,41 +760,46 @@ fn fake_codex_blocks_mode_falls_back_to_configured_provider_on_usage_limit() {
         .map(|line| serde_json::from_str(line).expect("fake codex request JSON"))
         .collect();
 
-    // The thread is re-resumed on the fallback provider with the OpenAI-specific
-    // service tier cleared.
-    let resume = requests
+    // The thread is forked onto the fallback provider with the OpenAI-specific
+    // service tier cleared (resume cannot switch a loaded thread's provider).
+    let fork = requests
         .iter()
-        .find(|value| value.get("method").and_then(Value::as_str) == Some("thread/resume"))
-        .unwrap_or_else(|| panic!("no thread/resume sent; requests={requests:?}"));
+        .find(|value| value.get("method").and_then(Value::as_str) == Some("thread/fork"))
+        .unwrap_or_else(|| panic!("no thread/fork sent; requests={requests:?}"));
     assert_eq!(
-        resume.pointer("/params/threadId").and_then(Value::as_str),
+        fork.pointer("/params/threadId").and_then(Value::as_str),
         Some("thread-1")
     );
     assert_eq!(
-        resume
-            .pointer("/params/modelProvider")
+        fork.pointer("/params/modelProvider")
             .and_then(Value::as_str),
         Some("zap")
     );
     assert_eq!(
-        resume.pointer("/params/model").and_then(Value::as_str),
+        fork.pointer("/params/model").and_then(Value::as_str),
         Some("glm-5-3-flash")
     );
     assert!(
-        resume
-            .get("params")
+        fork.get("params")
             .and_then(|params| params.get("serviceTier"))
             == Some(&Value::Null),
-        "fallback resume should clear serviceTier; params={:?}",
-        resume.get("params")
+        "fallback fork should clear serviceTier; params={:?}",
+        fork.get("params")
     );
 
-    // The turn is re-submitted once, with the fallback model.
+    // The turn is re-submitted once, against the forked thread, with the
+    // fallback model.
     let turn_starts: Vec<&Value> = requests
         .iter()
         .filter(|value| value.get("method").and_then(Value::as_str) == Some("turn/start"))
         .collect();
     assert_eq!(turn_starts.len(), 2, "requests={requests:?}");
+    assert_eq!(
+        turn_starts[1]
+            .pointer("/params/threadId")
+            .and_then(Value::as_str),
+        Some("thread-2")
+    );
     assert_eq!(
         turn_starts[1]
             .pointer("/params/model")
@@ -2589,15 +2594,19 @@ while IFS= read -r line; do
       id=$(request_id "$line")
       printf '{"id":%s,"result":{"thread":{"id":"thread-1"}}}\n' "$id"
       ;;
-    *'"method":"thread/resume"'*)
+    *'"method":"thread/fork"'*)
       id=$(request_id "$line")
-      printf '{"id":%s,"result":{"thread":{"id":"thread-1"}}}\n' "$id"
+      # The usage-limit fallback forks the failed thread onto the fallback
+      # provider: the forked thread gets a new id and the turn is re-submitted
+      # against it (codex pins the provider at thread start; a modelProvider
+      # override on thread/resume of a loaded thread is not applied).
+      printf '{"id":%s,"result":{"thread":{"id":"thread-2"}}}\n' "$id"
       ;;
     *'"method":"turn/start"'*)
       id=$(request_id "$line")
       # The request line was already appended to the log; the first turn/start
       # fails with a usage-limit error before any output, the second (the
-      # fallback re-submission) completes.
+      # fallback re-submission on the forked thread) completes.
       n=$(grep -c '"method":"turn/start"' "$log")
       printf '{"id":%s,"result":{"turn":{"id":"turn-%s"}}}\n' "$id" "$n"
       printf '{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-%s","items":[],"itemsView":"full","status":"inProgress","error":null,"startedAt":1,"completedAt":null,"durationMs":null}}}\n' "$n"
@@ -2609,9 +2618,9 @@ while IFS= read -r line; do
       if [ "$n" -eq 1 ]; then
         printf '{"method":"error","params":{"error":{"message":"The usage limit has been reached","codexErrorInfo":"usageLimitExceeded"},"willRetry":false,"threadId":"thread-1","turnId":"turn-1"}}\n'
       else
-        printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-2","itemId":"answer-1","delta":"codex blocks"}}'
-        printf '%s\n' '{"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-2","item":{"type":"agentMessage","id":"answer-1","text":"codex blocks","phase":null,"memoryCitation":null},"completedAtMs":2}}'
-        printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-2","items":[{"type":"agentMessage","id":"answer-1","text":"codex blocks","phase":null,"memoryCitation":null}],"itemsView":"full","status":"completed","error":null,"startedAt":1,"completedAt":2,"durationMs":1}}}'
+        printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-2","turnId":"turn-2","itemId":"answer-1","delta":"codex blocks"}}'
+        printf '%s\n' '{"method":"item/completed","params":{"threadId":"thread-2","turnId":"turn-2","item":{"type":"agentMessage","id":"answer-1","text":"codex blocks","phase":null,"memoryCitation":null},"completedAtMs":2}}'
+        printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-2","turn":{"id":"turn-2","items":[{"type":"agentMessage","id":"answer-1","text":"codex blocks","phase":null,"memoryCitation":null}],"itemsView":"full","status":"completed","error":null,"startedAt":1,"completedAt":2,"durationMs":1}}}'
       fi
       ;;
     *)

@@ -450,7 +450,7 @@ fn run_codex_user_turn<W: Write>(
                 let from_provider = thread_provider.as_deref().unwrap_or("unknown");
                 eprintln!(
                     "codex usage limit reached on provider `{from_provider}`; \
-                     resuming thread on fallback provider `{}`",
+                     forking thread onto fallback provider `{}`",
                     fallback.provider
                 );
                 // Durable, client-visible record of the switch: every harness
@@ -466,7 +466,12 @@ fn run_codex_user_turn<W: Write>(
                         }
                     }),
                 )?;
-                if let Err(error) = resume_thread_on_fallback_provider(
+                // codex pins a thread's provider at thread start and rejoining
+                // a live thread via thread/resume does not apply a modelProvider
+                // override (codex 0.153 records it as a mismatch and keeps the
+                // active provider). thread/fork loads the thread from disk into
+                // a NEW thread, where the override takes effect.
+                let forked_thread_id = match fork_thread_on_fallback_provider(
                     codex,
                     stdout,
                     request_id,
@@ -474,13 +479,18 @@ fn run_codex_user_turn<W: Write>(
                     &fallback,
                     traceparent,
                 ) {
-                    eprintln!("codex fallback resume failed: {error:#}");
-                    for value in &withheld {
-                        telemetry.observe_wire_value(value);
-                        write_value(stdout, value)?;
+                    Ok(forked_thread_id) => forked_thread_id,
+                    Err(error) => {
+                        eprintln!("codex fallback fork failed: {error:#}");
+                        for value in &withheld {
+                            telemetry.observe_wire_value(value);
+                            write_value(stdout, value)?;
+                        }
+                        return Err(error);
                     }
-                    return Err(error);
-                }
+                };
+                *thread_id = Some(forked_thread_id.clone());
+                params["threadId"] = Value::String(forked_thread_id);
                 fell_back = true;
                 *thread_provider = Some(fallback.provider.clone());
                 if let Some(model) = &fallback.model {
@@ -543,31 +553,34 @@ fn fallback_warning_message(fallback: &FallbackProvider, from_provider: &str) ->
     match &fallback.model {
         Some(model) => format!(
             "Codex usage limit reached on provider `{from_provider}`; \
-             resuming this thread on fallback provider `{}` with model `{model}`.",
+             moving this thread to fallback provider `{}` with model `{model}`.",
             fallback.provider
         ),
         None => format!(
             "Codex usage limit reached on provider `{from_provider}`; \
-             resuming this thread on fallback provider `{}`.",
+             moving this thread to fallback provider `{}`.",
             fallback.provider
         ),
     }
 }
 
-/// Re-resume the thread on the fallback provider, preserving its full
-/// history. Codex pins the provider at thread start, but `thread/resume` on an
-/// idle loaded thread cold-resumes it with the given config overrides, which
-/// is what makes a provider switch possible without losing context.
+/// Fork the thread onto the fallback provider, preserving its full history.
+/// Codex pins the provider at thread start, and `thread/resume` on a thread
+/// that is still loaded in the app-server rejoins it WITHOUT applying the
+/// modelProvider override (codex 0.153 records the override as a mismatch and
+/// keeps the active provider). `thread/fork` loads the thread from disk into a
+/// NEW thread, where the override takes effect — that is what makes a provider
+/// switch possible without losing context. Returns the forked thread's id.
 /// `serviceTier: null` clears a pinned tier (e.g. an OpenAI-specific tier from
 /// the baked config) that plain OpenAI-compatible fallback providers reject.
-fn resume_thread_on_fallback_provider<W: Write>(
+fn fork_thread_on_fallback_provider<W: Write>(
     codex: &mut CodexJsonRpcChild,
     stdout: &mut W,
     request_id: &mut i64,
     thread_id: &str,
     fallback: &FallbackProvider,
     traceparent: Option<&str>,
-) -> Result<()> {
+) -> Result<String> {
     let cwd = env::current_dir()?.display().to_string();
     let mut params = json!({
         "threadId": thread_id,
@@ -583,9 +596,15 @@ fn resume_thread_on_fallback_provider<W: Write>(
         params["model"] = Value::String(model.clone());
     }
     let id = next_request_id(request_id);
-    codex.send_request(id, "thread/resume", params, traceparent)?;
-    codex.read_response_or_forward(id, stdout)?;
-    Ok(())
+    codex.send_request(id, "thread/fork", params, traceparent)?;
+    let result = codex.read_response_or_forward(id, stdout)?;
+    result
+        .pointer("/thread/id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or(HarnessServerError::Protocol(
+            "thread/fork response missing thread.id".to_string(),
+        ))
 }
 
 fn start_or_resume_thread<W: Write>(
