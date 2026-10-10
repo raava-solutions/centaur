@@ -274,3 +274,41 @@ agentSandbox:
 #    asus-trx50:~zay/.config/modelctl/gateway-api-key (mode 0600, do not copy
 #    into this repo or cluster Secrets). Until this item exists, fallback turns
 #    fail with the gateway's 401 and surface as ordinary turn errors.
+#
+# 5. LINEAR_API_KEY in the 1Password Connect vault (item named
+#    LINEAR_API_KEY, field credential): the Linear personal API key used by the
+#    `linear` tool (tools/productivity/linear, mounted from the base-repo
+#    overlay source — the sandbox shim is already installed fleet-wide).
+#    iron-control registration was done out of band:
+#      centaur-perms --tools-dir tools --source-policy onepassword-connect \
+#        --op-vault Engineering roles grant infra --tool linear
+#    which created the static secret tool-linear-linear-api-key
+#    (ssr_68ki6juq, inject Authorization header, hosts api.linear.app +
+#    uploads.linear.app, source op://Engineering/LINEAR_API_KEY/credential)
+#    and granted it to the shared infra role, so every session principal gets
+#    Linear. api-rs startup sync is grant-additive and will not remove this.
+#    Sandboxes need no env placeholder: the CLI sends the literal stub
+#    "LINEAR_API_KEY" and iron-proxy injects the real key on the wire. Until
+#    the 1Password item exists the proxy logs "failed to fetch secret" and
+#    passes the request through untouched (Linear answers 401); other egress
+#    is unaffected, and resolution retries every 60s, so no pod restarts are
+#    needed when the item appears. The key itself is created by hand in the
+#    Linear UI (Settings -> Account -> Security -> Personal API Keys).
+#
+# 6. SLACK_BOT_TOKEN in the 1Password Connect vault (item named
+#    SLACK_BOT_TOKEN, field credential): the same bot token slackbotv2 uses
+#    (mirrored from the centaur-infra-env k8s Secret into 1Password
+#    2026-10-10). Needed by the sandbox `slack` tool
+#    (tools/productivity/slack): its SLACK_BOT_TOKEN inject secret was never
+#    registered in iron-control, so sandbox Slack calls went out with the
+#    placeholder and failed invalid_auth. Registered out of band with:
+#      centaur-perms --tools-dir tools --source-policy onepassword-connect \
+#        --op-vault Engineering roles grant infra --tool slack
+#    which registered tool-slack-slack-bot-token (+ the optional
+#    SLACK_SEARCH_TOKEN) and granted them to the shared infra role. Verified
+#    live: `slack health` in a sandbox returns the workspace channel list.
+#    Note: centaur-perms must be built from the production branch
+#    (feat/rust-production-cutover or later); the feat/raava-overlay-on-rs
+#    build 401s/deserialization-fails against the deployed console, and the
+#    console API key is IRON_CONTROL_INITIAL_API_KEY in centaur-infra-env
+#    (not IRON_MANAGEMENT_API_KEY).
