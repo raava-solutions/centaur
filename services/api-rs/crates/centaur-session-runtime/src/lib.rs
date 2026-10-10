@@ -1,4 +1,5 @@
 mod cleanup;
+mod honcho;
 mod retention;
 mod title_generator;
 
@@ -53,6 +54,7 @@ use tracing::{Instrument, Span, debug, error, info, info_span, warn};
 use uuid::Uuid;
 
 pub use cleanup::SessionSandboxCleanupConfig;
+use honcho::{HonchoMemory, HonchoTurnMessage};
 pub use retention::SessionEventRetentionConfig;
 pub use title_generator::SessionTitleGenerationError;
 use title_generator::{
@@ -152,6 +154,7 @@ pub struct SessionRuntime {
     session_title_in_flight: SessionTitleThreadSet,
     session_title_rerun_requested: SessionTitleThreadSet,
     capacity: Option<Arc<SandboxCapacityController>>,
+    honcho: Option<HonchoMemory>,
     stdout_owner_id: String,
     /// Set once a shutdown handoff begins; fences new stdout-owner claims
     /// so an execution cannot start on a control plane that is about to
@@ -539,6 +542,7 @@ struct RuntimeContext {
     sandbox_pipes: SessionPipeMap,
     execution_spans: ExecutionSpanRegistry,
     stdout_owner_id: String,
+    honcho: Option<HonchoMemory>,
 }
 
 struct SandboxCapacityController {
@@ -944,6 +948,7 @@ impl SessionRuntime {
             session_title_in_flight: Arc::new(DashSet::new()),
             session_title_rerun_requested: Arc::new(DashSet::new()),
             capacity: None,
+            honcho: None,
             stdout_owner_id: format!("api-rs-{}", uuid::Uuid::new_v4().simple()),
             shutting_down: Arc::new(AtomicBool::new(false)),
         }
@@ -971,6 +976,21 @@ impl SessionRuntime {
 
     pub fn with_personas(mut self, personas: PersonaRegistry) -> Self {
         self.personas = Some(Arc::new(personas));
+        self
+    }
+
+    /// Enable the Honcho peer-memory integration from environment config
+    /// (`HONCHO_ENABLED` + `HONCHO_BASE_URL`, see the `honcho` module). Absent
+    /// or disabled config leaves the runtime without any Honcho wiring.
+    pub fn with_honcho_memory_from_env(mut self) -> Self {
+        self.honcho = HonchoMemory::from_env();
+        if self.honcho.is_some() {
+            info!(
+                component = COMPONENT_SESSION_RUNTIME,
+                event = "honcho_memory_enabled",
+                "Honcho peer-memory integration enabled"
+            );
+        }
         self
     }
 
@@ -1012,6 +1032,7 @@ impl SessionRuntime {
             sandbox_pipes: self.sandbox_pipes.clone(),
             execution_spans: self.execution_spans.clone(),
             stdout_owner_id: self.stdout_owner_id.clone(),
+            honcho: self.honcho.clone(),
         }
     }
 
@@ -1806,6 +1827,16 @@ impl SessionRuntime {
                 return Err(error);
             }
         };
+        if thread_key.chat_destination().is_some()
+            && let Some(honcho) = self.honcho.clone()
+        {
+            spawn_honcho_message_mirror(
+                honcho,
+                self.store.clone(),
+                thread_key.clone(),
+                messages.to_vec(),
+            );
+        }
         self.forward_messages_to_active_execution(thread_key, messages, &message_ids)
             .await;
         self.spawn_session_title_generation(thread_key);
@@ -2268,7 +2299,15 @@ impl SessionRuntime {
                 traceparent.or_else(|| execution_traceparent(&execution).map(ToOwned::to_owned)),
                 Some(&execution.execution_id),
             );
-            let input_lines = input_lines_with_session_context(thread_key, &trace, &input_lines);
+            let honcho_memory_block = self
+                .honcho_context_block(thread_key, requester_metadata.as_ref())
+                .await;
+            let input_lines = input_lines_with_session_context(
+                thread_key,
+                &trace,
+                &input_lines,
+                honcho_memory_block.as_deref(),
+            );
             if let Err(error) = write_input_lines(
                 &pipe,
                 &input_lines,
@@ -2590,7 +2629,7 @@ impl SessionRuntime {
             execution_traceparent(&execution).map(ToOwned::to_owned),
             Some(&execution.execution_id),
         );
-        let input_lines = input_lines_with_session_context(thread_key, &trace, &input_lines);
+        let input_lines = input_lines_with_session_context(thread_key, &trace, &input_lines, None);
 
         let pipe = match self
             .wait_for_active_steering_pipe(thread_key, &execution.execution_id)
@@ -2664,6 +2703,7 @@ impl SessionRuntime {
             thread_key,
             &trace,
             &[interrupt_input_line(thread_key, reason)],
+            None,
         );
 
         let pipe = self
@@ -3235,6 +3275,43 @@ impl SessionRuntime {
                     thread_key = %thread_key,
                     %error,
                     "failed to register requester principal; proceeding without a requester"
+                );
+                None
+            }
+        }
+    }
+
+    /// Best-effort Honcho context read for the requester of this execution.
+    /// Any failure (Honcho down, slow, or peer unknown) degrades to no
+    /// injected memory so the turn proceeds unaffected.
+    async fn honcho_context_block(
+        &self,
+        thread_key: &ThreadKey,
+        requester_metadata: Option<&Value>,
+    ) -> Option<String> {
+        // Memory is a chat-surface feature; tool-host (`mcp:`) and other
+        // non-platform threads have no requester peer.
+        thread_key.chat_destination()?;
+        let honcho = self.honcho.clone()?;
+        let peer_id = honcho::sanitize_id(&honcho::requester_peer_id(requester_metadata?)?);
+        match timeout(honcho.inject_timeout(), honcho.peer_context_block(&peer_id)).await {
+            Ok(Ok(block)) => block,
+            Ok(Err(error)) => {
+                warn!(
+                    component = COMPONENT_SESSION_RUNTIME,
+                    event = "honcho_context_fetch_failed",
+                    thread_key = %thread_key,
+                    %error,
+                    "Honcho context fetch failed; continuing without memory injection"
+                );
+                None
+            }
+            Err(_) => {
+                warn!(
+                    component = COMPONENT_SESSION_RUNTIME,
+                    event = "honcho_context_fetch_timeout",
+                    thread_key = %thread_key,
+                    "Honcho context fetch timed out; continuing without memory injection"
                 );
                 None
             }
@@ -5363,6 +5440,11 @@ async fn record_terminal_output(
                     payload,
                 )
                 .await?;
+            if thread_key.chat_destination().is_some()
+                && let (Some(honcho), Some(answer)) = (ctx.honcho.clone(), result_text.clone())
+            {
+                spawn_honcho_answer_mirror(honcho, ctx.store.clone(), thread_key.clone(), answer);
+            }
             (execution, "completed")
         }
         TerminalOutput::Cancelled { reason } => {
@@ -5455,6 +5537,124 @@ async fn record_terminal_output(
         );
     }
     Ok(())
+}
+
+/// Spawn a best-effort mirror of appended session messages into Honcho. Runs
+/// detached so Honcho latency or downtime never slows the append path; a
+/// failure only costs the memory write and is logged.
+fn spawn_honcho_message_mirror(
+    honcho: HonchoMemory,
+    store: PgSessionStore,
+    thread_key: ThreadKey,
+    messages: Vec<SessionMessageInput>,
+) {
+    tokio::spawn(async move {
+        if let Err(error) = mirror_messages_to_honcho(&honcho, &store, &thread_key, &messages).await
+        {
+            warn!(
+                component = COMPONENT_SESSION_RUNTIME,
+                event = "honcho_message_mirror_failed",
+                thread_key = %thread_key,
+                %error,
+                "failed to mirror session messages to Honcho"
+            );
+        }
+    });
+}
+
+async fn mirror_messages_to_honcho(
+    honcho: &HonchoMemory,
+    store: &PgSessionStore,
+    thread_key: &ThreadKey,
+    messages: &[SessionMessageInput],
+) -> Result<(), honcho::HonchoError> {
+    let persona_id = match store.get_session(thread_key).await {
+        Ok(session) => session.persona_id,
+        Err(error) => {
+            warn!(
+                component = COMPONENT_SESSION_RUNTIME,
+                event = "honcho_session_lookup_failed",
+                thread_key = %thread_key,
+                %error,
+                "failed to load session persona for Honcho mirror"
+            );
+            None
+        }
+    };
+    let agent_peer = honcho::sanitize_id(&honcho::agent_peer_id(persona_id.as_deref()));
+    let mut peers = BTreeSet::from([agent_peer.clone()]);
+    let mut turn_messages = Vec::new();
+    for message in messages {
+        let Some(content) = honcho::honcho_text_from_parts(&message.parts) else {
+            continue;
+        };
+        let peer_id = match message.role {
+            MessageRole::User => match honcho::requester_peer_id(&message.metadata) {
+                Some(peer_id) => honcho::sanitize_id(&peer_id),
+                None => continue,
+            },
+            MessageRole::Assistant => agent_peer.clone(),
+            MessageRole::System | MessageRole::Tool => continue,
+        };
+        peers.insert(peer_id.clone());
+        turn_messages.push(HonchoTurnMessage { peer_id, content });
+    }
+    honcho
+        .record_turn(
+            thread_key.as_str(),
+            &peers.into_iter().collect::<Vec<_>>(),
+            &turn_messages,
+        )
+        .await
+}
+
+/// Spawn a best-effort mirror of a completed execution's final answer into
+/// Honcho as the agent peer's message.
+fn spawn_honcho_answer_mirror(
+    honcho: HonchoMemory,
+    store: PgSessionStore,
+    thread_key: ThreadKey,
+    answer: String,
+) {
+    tokio::spawn(async move {
+        let result = async {
+            let persona_id = match store.get_session(&thread_key).await {
+                Ok(session) => session.persona_id,
+                Err(error) => {
+                    warn!(
+                        component = COMPONENT_SESSION_RUNTIME,
+                        event = "honcho_session_lookup_failed",
+                        thread_key = %thread_key,
+                        %error,
+                        "failed to load session persona for Honcho mirror"
+                    );
+                    None
+                }
+            };
+            let agent_peer = honcho::sanitize_id(&honcho::agent_peer_id(persona_id.as_deref()));
+            let peers = [agent_peer.clone()];
+            honcho
+                .record_turn(
+                    thread_key.as_str(),
+                    &peers,
+                    &[HonchoTurnMessage {
+                        peer_id: agent_peer,
+                        content: answer,
+                    }],
+                )
+                .await
+        }
+        .await;
+        if let Err(error) = result {
+            warn!(
+                component = COMPONENT_SESSION_RUNTIME,
+                event = "honcho_answer_mirror_failed",
+                thread_key = %thread_key,
+                %error,
+                "failed to mirror execution answer to Honcho"
+            );
+        }
+    });
 }
 
 fn spawn_max_duration_failure(
@@ -6522,10 +6722,11 @@ fn input_lines_with_session_context(
     thread_key: &ThreadKey,
     trace: &SessionTraceContext,
     input_lines: &[String],
+    memory_context: Option<&str>,
 ) -> Vec<String> {
     input_lines
         .iter()
-        .map(|line| input_line_with_session_context(thread_key, trace, line))
+        .map(|line| input_line_with_session_context(thread_key, trace, line, memory_context))
         .collect()
 }
 
@@ -6533,6 +6734,7 @@ fn input_line_with_session_context(
     thread_key: &ThreadKey,
     trace: &SessionTraceContext,
     line: &str,
+    memory_context: Option<&str>,
 ) -> String {
     let Ok(mut value) = serde_json::from_str::<Value>(line) else {
         return line.to_owned();
@@ -6559,9 +6761,28 @@ fn input_line_with_session_context(
                 .or_insert_with(|| Value::String(execution_id.to_owned()));
         }
     }
+    if let Some(memory_context) = memory_context {
+        prepend_memory_context_note(map, memory_context);
+    }
     prepend_chat_surface_note(map, thread_key);
     merge_session_context(map, session_context_for_thread(thread_key));
     serde_json::to_string(&value).unwrap_or_else(|_| line.to_owned())
+}
+
+/// Prepend the requester's Honcho memory block to a user turn's content, ahead
+/// of the requester/thread context the ingress already attached. Only `user`
+/// turns with an array content payload are touched; every other shape is left
+/// untouched. Inserted before `prepend_chat_surface_note` so the surface note
+/// stays first.
+fn prepend_memory_context_note(map: &mut serde_json::Map<String, Value>, memory_context: &str) {
+    if map.get("type").and_then(Value::as_str) != Some("user") {
+        return;
+    }
+    let Some(Value::Array(content)) = map.get_mut("message").and_then(|m| m.get_mut("content"))
+    else {
+        return;
+    };
+    content.insert(0, json!({ "type": "text", "text": memory_context }));
 }
 
 /// Prepend a terse chat-surface note to a user turn's content so the agent always
@@ -8552,7 +8773,7 @@ mod tests {
         let thread_key = ThreadKey::parse("chat:C123:1780000000.000000").unwrap();
         let trace = SessionTraceContext::new(None, None);
 
-        let line = input_line_with_session_context(&thread_key, &trace, r#"{"type":"user"}"#);
+        let line = input_line_with_session_context(&thread_key, &trace, r#"{"type":"user"}"#, None);
         let value: Value = serde_json::from_str(&line).unwrap();
 
         assert_eq!(value["type"], "user");
@@ -8576,6 +8797,7 @@ mod tests {
             &thread_key,
             &trace,
             r#"{"type":"user","trace_metadata":{"action":"execute"}}"#,
+            None,
         );
         let value: Value = serde_json::from_str(&line).unwrap();
 
@@ -8588,7 +8810,7 @@ mod tests {
         let thread_key = ThreadKey::parse("slack:T123:C123:1780000000.000000").unwrap();
         let trace = SessionTraceContext::new(None, None);
 
-        let line = input_line_with_session_context(&thread_key, &trace, r#"{"type":"user"}"#);
+        let line = input_line_with_session_context(&thread_key, &trace, r#"{"type":"user"}"#, None);
         let value: Value = serde_json::from_str(&line).unwrap();
 
         assert_eq!(value["session_context"]["platform"], "slack");
@@ -8604,7 +8826,7 @@ mod tests {
         let thread_key = ThreadKey::parse("discord:111:222:333").unwrap();
         let trace = SessionTraceContext::new(None, None);
 
-        let line = input_line_with_session_context(&thread_key, &trace, r#"{"type":"user"}"#);
+        let line = input_line_with_session_context(&thread_key, &trace, r#"{"type":"user"}"#, None);
         let value: Value = serde_json::from_str(&line).unwrap();
 
         assert_eq!(value["session_context"]["platform"], "discord");
@@ -8619,7 +8841,7 @@ mod tests {
         let thread_key = ThreadKey::parse("linear:ISSUE:s:SESS").unwrap();
         let trace = SessionTraceContext::new(None, None);
 
-        let line = input_line_with_session_context(&thread_key, &trace, r#"{"type":"user"}"#);
+        let line = input_line_with_session_context(&thread_key, &trace, r#"{"type":"user"}"#, None);
         let value: Value = serde_json::from_str(&line).unwrap();
 
         assert_eq!(value["session_context"]["platform"], "linear");
@@ -8641,7 +8863,7 @@ mod tests {
         let thread_key = ThreadKey::parse("github:0xSplits/centaur:704:rc:99").unwrap();
         let trace = SessionTraceContext::new(None, None);
 
-        let line = input_line_with_session_context(&thread_key, &trace, r#"{"type":"user"}"#);
+        let line = input_line_with_session_context(&thread_key, &trace, r#"{"type":"user"}"#, None);
         let value: Value = serde_json::from_str(&line).unwrap();
 
         assert_eq!(value["session_context"]["platform"], "github");
@@ -8661,6 +8883,7 @@ mod tests {
             &thread_key,
             &trace,
             r#"{"type":"user","session_context":{"requester":{"github_handle":"@ada"},"platform":"custom"}}"#,
+            None,
         );
         let value: Value = serde_json::from_str(&line).unwrap();
 
@@ -8684,6 +8907,7 @@ mod tests {
             &thread_key,
             &trace,
             r#"{"type":"user","thread_key":"chat:existing","trace_id":"caller-trace"}"#,
+            None,
         );
         let value: Value = serde_json::from_str(&line).unwrap();
 
@@ -8694,7 +8918,7 @@ mod tests {
             "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
         );
         assert_eq!(
-            input_line_with_session_context(&thread_key, &trace, "raw"),
+            input_line_with_session_context(&thread_key, &trace, "raw", None),
             "raw"
         );
     }
@@ -8708,6 +8932,7 @@ mod tests {
             &thread_key,
             &trace,
             r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}"#,
+            None,
         );
         let value: Value = serde_json::from_str(&line).unwrap();
         let content = value["message"]["content"].as_array().unwrap();
@@ -8721,6 +8946,48 @@ mod tests {
     }
 
     #[test]
+    fn input_line_prepends_memory_context_to_user_content() {
+        let thread_key = ThreadKey::parse("slack:C123:123.456").unwrap();
+        let trace = SessionTraceContext::new(None, None);
+
+        let line = input_line_with_session_context(
+            &thread_key,
+            &trace,
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}"#,
+            Some("# Memory Context (Honcho)\n\nPrefers edlin.\n\n---"),
+        );
+        let value: Value = serde_json::from_str(&line).unwrap();
+        let content = value["message"]["content"].as_array().unwrap();
+
+        // Chat surface note stays first, memory block second, then the turn.
+        assert_eq!(content.len(), 3);
+        assert!(content[0]["text"].as_str().unwrap().contains("Slack"));
+        assert!(
+            content[1]["text"]
+                .as_str()
+                .unwrap()
+                .contains("# Memory Context (Honcho)")
+        );
+        assert_eq!(content[2]["text"], "hi");
+    }
+
+    #[test]
+    fn input_line_skips_memory_context_for_non_user_lines() {
+        let thread_key = ThreadKey::parse("slack:C123:123.456").unwrap();
+        let trace = SessionTraceContext::new(None, None);
+
+        let line = input_line_with_session_context(
+            &thread_key,
+            &trace,
+            r#"{"type":"attachment.chunk","chunkIndex":0}"#,
+            Some("# Memory Context (Honcho)\n\n---"),
+        );
+        let value: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(value["type"], "attachment.chunk");
+        assert!(value.get("message").is_none());
+    }
+
+    #[test]
     fn input_line_prepends_slack_chat_surface_note_to_user_content() {
         let thread_key = ThreadKey::parse("slack:C123:123.456").unwrap();
         let trace = SessionTraceContext::new(None, None);
@@ -8729,6 +8996,7 @@ mod tests {
             &thread_key,
             &trace,
             r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}"#,
+            None,
         );
         let value: Value = serde_json::from_str(&line).unwrap();
         let content = value["message"]["content"].as_array().unwrap();
@@ -8747,6 +9015,7 @@ mod tests {
             &thread_key,
             &trace,
             r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}"#,
+            None,
         );
         let value: Value = serde_json::from_str(&line).unwrap();
         let content = value["message"]["content"].as_array().unwrap();
@@ -8767,6 +9036,7 @@ mod tests {
             &thread_key,
             &trace,
             r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}"#,
+            None,
         );
         let value: Value = serde_json::from_str(&line).unwrap();
         let content = value["message"]["content"].as_array().unwrap();
@@ -8788,6 +9058,7 @@ mod tests {
             &thread_key,
             &trace,
             r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}"#,
+            None,
         );
         let value: Value = serde_json::from_str(&line).unwrap();
         let content = value["message"]["content"].as_array().unwrap();

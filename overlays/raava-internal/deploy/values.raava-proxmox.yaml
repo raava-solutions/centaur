@@ -122,6 +122,11 @@ apiRs:
   sandboxWarmPoolSize: 1
   extraEnv:
     CENTAUR_DEFAULT_PERSONA: chief
+    # Platform-level Honcho peer memory (api-rs-side): mirrors every turn into
+    # Honcho and injects the requester's derived context into each executed
+    # turn. Base URL + workspace ride the out-of-band centaur-infra-env Secret
+    # (already in api-rs env via envFrom); this flag is the on/off switch.
+    HONCHO_ENABLED: "true"
     # Extra sandbox passthrough names on top of the 32 the chart renders
     # from apiRs.etl.* (the chart appends these to SESSION_SANDBOX_PASSTHROUGH_ENV).
     # These keys hold credentials the in-sandbox infra tools need; values come
@@ -352,3 +357,21 @@ agentSandbox:
 #    agents; session id = the centaur thread key. Honcho ids only allow
 #    [a-zA-Z0-9_-], so the tool sanitizes `:` and `.` to `-` — the stored
 #    ids read slack-U0123ABC / slack-C0TEST12345-1791670752-873056.
+#
+# 8. Platform-level Honcho memory in api-rs (HONCHO_ENABLED=true in
+#    apiRs.extraEnv above): centaur-session-runtime mirrors every chat turn
+#    into Honcho (user messages from the append path, the final answer from
+#    the execution terminal event) and injects the requester's derived peer
+#    context into each executed user turn as a `# Memory Context (Honcho)`
+#    block. api-rs reaches Honcho directly (no iron-proxy) at the same
+#    https://honcho.raava.dev from item 7 — HONCHO_BASE_URL/HONCHO_WORKSPACE
+#    are already in the api-rs pod env via the centaur-infra-env envFrom, so
+#    no extra secret wiring was needed; HONCHO_API_KEY is unset because the
+#    instance runs AUTH_USE_AUTH=false (nginx binds only the tailnet address
+#    100.85.65.58:443). All calls are best-effort with short timeouts: Honcho
+#    being down never fails a turn (logged as honcho_* warn events). Peer ids
+#    are sanitized onto Honcho's [a-zA-Z0-9_-] alphabet exactly like the tool
+#    (slack:U… -> slack-U…), so platform-stored and tool-stored messages land
+#    on the same peers/sessions. Honcho LXC 116 ops: docker-compose v1 at
+#    /bin/docker-compose, project /opt/honcho — the api service must stay
+#    bound to 127.0.0.1:8000; nginx (sites-available/honcho) fronts it.
