@@ -88,7 +88,7 @@ overlays:
     # in would silently swap every base tool. Ref pinned to the honcho tool
     # branch head; repin to the merge sha when the PR lands.
     - repo: raava-solutions/centaur
-      ref: "PIN_TO_HONCHO_TOOL_SHA"
+      ref: "e0e9c16c1b387180dfdaaec0ee173ecdf07116af"
       toolsSubdir: tools/memory
       workflowsSubdir: ""
       skillsSubdir: ""
