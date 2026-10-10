@@ -72,12 +72,12 @@ overlays:
     - repo: paradigmxyz/centaur
       ref: "abe1d95e8289d362364a31677b01623611927144"
       visibility: public
-    # Raava overlay pinned to feat/rust-production-cutover @ fb22d3e9 (PR #19:
-    # Proxmox destructive-op approval policy in the chief persona + org
-    # overlay prompt). Drives both repo-cache REPOSITORY_REFS and api-rs
-    # KUBERNETES_TOOLS_EXTRA_SOURCES.
+    # Raava overlay pinned to feat/honcho-memory-tool @ 7374c155 (PR #21:
+    # chief persona learns the platform-provided Honcho memory). Repin to the
+    # merge sha when the PR lands. Drives both repo-cache REPOSITORY_REFS and
+    # api-rs KUBERNETES_TOOLS_EXTRA_SOURCES.
     - repo: raava-solutions/centaur
-      ref: "fb22d3e93e11c30a3261f2b63ba7ca91022ca15e"
+      ref: "7374c155c18e1898eb108862475cc63fc0bd2264"
       toolsSubdir: overlays/raava-internal/tools
       skillsSubdir: overlays/raava-internal/.agents/skills
       workflowsSubdir: overlays/raava-internal/workflows
@@ -105,10 +105,10 @@ apiRs:
   image:
     repository: centaur-api-rs
     <<: *release
-    # api-rs runs the wave-2 build (PR #14 empty-input_lines 400 rejection +
-    # PR #15 pi runtime support, carries migration 0055). Repin to a
-    # release tag once a full 0.1.141 image set is side-loaded.
-    tag: "0.1.141-90a244bb"
+    # api-rs runs the Honcho platform-memory build (PR #21: auto write-back +
+    # context injection from feat/honcho-memory-tool). Repin to the merge sha
+    # (or release tag) once the PR lands and the image is rebuilt.
+    tag: "0.1.141-7374c155"
   runMigrations: true
   syncInfraSecrets: true
   # 1Password vault the registered tool-secret sources resolve op:// refs from
