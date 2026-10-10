@@ -294,3 +294,21 @@ agentSandbox:
 #    is unaffected, and resolution retries every 60s, so no pod restarts are
 #    needed when the item appears. The key itself is created by hand in the
 #    Linear UI (Settings -> Account -> Security -> Personal API Keys).
+#
+# 6. SLACK_BOT_TOKEN in the 1Password Connect vault (item named
+#    SLACK_BOT_TOKEN, field credential): the same bot token slackbotv2 uses
+#    (mirrored from the centaur-infra-env k8s Secret into 1Password
+#    2026-10-10). Needed by the sandbox `slack` tool
+#    (tools/productivity/slack): its SLACK_BOT_TOKEN inject secret was never
+#    registered in iron-control, so sandbox Slack calls went out with the
+#    placeholder and failed invalid_auth. Registered out of band with:
+#      centaur-perms --tools-dir tools --source-policy onepassword-connect \
+#        --op-vault Engineering roles grant infra --tool slack
+#    which registered tool-slack-slack-bot-token (+ the optional
+#    SLACK_SEARCH_TOKEN) and granted them to the shared infra role. Verified
+#    live: `slack health` in a sandbox returns the workspace channel list.
+#    Note: centaur-perms must be built from the production branch
+#    (feat/rust-production-cutover or later); the feat/raava-overlay-on-rs
+#    build 401s/deserialization-fails against the deployed console, and the
+#    console API key is IRON_CONTROL_INITIAL_API_KEY in centaur-infra-env
+#    (not IRON_MANAGEMENT_API_KEY).
