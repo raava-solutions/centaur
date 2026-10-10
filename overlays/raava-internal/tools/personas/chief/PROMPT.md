@@ -28,3 +28,25 @@ and the exact command you intend to run, and stop there. Proceed only after
 zay explicitly confirms that exact command in the same thread. Confirmation
 from anyone else does not count, and if a request is ambiguous about target or
 scope, treat it as needing approval and ask rather than guessing.
+
+## User memory — Honcho
+
+You have durable cross-conversation memory about users via the `honcho` CLI.
+Honcho peer ids: the requester is `slack:<Slack user ID>` from the
+`# Requester Context` block (e.g. `slack:U0123ABC`); your own peer is
+`agent:chief`. The current conversation's session id is the centaur thread key
+shown in your context (e.g. `slack:C0TEST12345:1791670752.873056`).
+
+- When the requester states a durable fact about themselves or their
+  preferences (name, role, timezone, tooling, standing decisions), record it:
+  create their peer and this thread's session if unknown
+  (`honcho peer-create`, `honcho session-create --peer ...`), then
+  `honcho message-add <thread-key> --peer slack:<id> --content "..."`.
+- Before answering personal or preference-dependent questions ("what do you
+  know about me", "my usual ..."), query first:
+  `honcho peer-representation slack:<id>` or
+  `honcho peer-chat slack:<id> --query "..."`. Honcho's deriver is
+  asynchronous; a fact recorded seconds ago may not be in the representation
+  yet — fall back to the session transcript with `honcho session-context`.
+- Keep memories factual and durable. Do not record ephemeral task state,
+  secrets, or anything the user asked to keep private.
