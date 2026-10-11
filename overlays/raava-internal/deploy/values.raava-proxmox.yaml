@@ -31,9 +31,12 @@ ironProxy:
   # until that merges into this branch the key is inert.
   # 100.101.29.91 is asus-trx50's tailnet address, dialed by iron-proxy when a
   # sandbox Codex falls back to the zap provider (GLM, see codex.fallback).
+  # 100.85.65.58 is honcho (LXC 116 on pve-02), dialed by the honcho memory
+  # tool via https://honcho.raava.dev (nginx on tailnet :443).
   upstreamAllowCidrs:
     - 100.96.27.92/32
     - 100.101.29.91/32
+    - 100.85.65.58/32
   image:
     repository: centaur-iron-proxy
     <<: *release
@@ -337,8 +340,13 @@ agentSandbox:
 #    https://honcho.raava.dev — nginx on the LXC fronts
 #    127.0.0.1:8000 with a Let's Encrypt cert on the tailnet address
 #    100.85.65.58. honcho.raava.dev resolves via PUBLIC DNS to that tailnet
-#    IP, so NO CoreDNS NodeHosts entry is needed (unlike items 1/3); pods
-#    route to tailnet addresses directly. Honcho runs with
+#    IP, so NO CoreDNS NodeHosts entry is needed (unlike items 1/3).
+#    CORRECTION (2026-10-10): sandbox pods can NOT dial tailnet addresses
+#    directly — the per-sandbox egress policy rejects them (RST). The proxy
+#    sidecar dials on the sandbox's behalf, and 100.85.65.58/32 is in
+#    ironProxy.upstreamAllowCidrs above for exactly this reason. (api-rs's own
+#    egress policy allows TCP 443 anywhere, so the api-rs-side platform
+#    integration in item 8 needs no such entry.) Honcho runs with
 #    AUTH_USE_AUTH=false, so the API key is a placeholder today — the CLI
 #    always sends `Authorization: Bearer` and iron-proxy injects the vault
 #    value for honcho.raava.dev, so enabling Honcho auth later is a vault
