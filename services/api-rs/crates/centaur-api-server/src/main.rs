@@ -78,7 +78,8 @@ async fn initialize_runtime(args: Args, app_state: AppState) -> Result<(), Serve
     let sandbox_runtime = args.sandbox_runtime().await?;
     let iron_control = args.iron_control_runtime().await?;
     let mut runtime = SessionRuntime::new(store.clone(), sandbox_runtime, iron_control.registrar)
-        .with_openai_session_title_generator_from_env();
+        .with_openai_session_title_generator_from_env()
+        .with_honcho_memory_from_env();
     runtime = runtime.with_personas(args.persona_registry()?);
     let sandbox_capacity_config = args.sandbox_capacity_config();
     if let Some(config) = sandbox_capacity_config {

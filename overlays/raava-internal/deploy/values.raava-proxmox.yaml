@@ -31,9 +31,12 @@ ironProxy:
   # until that merges into this branch the key is inert.
   # 100.101.29.91 is asus-trx50's tailnet address, dialed by iron-proxy when a
   # sandbox Codex falls back to the zap provider (GLM, see codex.fallback).
+  # 100.85.65.58 is honcho (LXC 116 on pve-02), dialed by the honcho memory
+  # tool via https://honcho.raava.dev (nginx on tailnet :443).
   upstreamAllowCidrs:
     - 100.96.27.92/32
     - 100.101.29.91/32
+    - 100.85.65.58/32
   image:
     repository: centaur-iron-proxy
     <<: *release
@@ -72,15 +75,26 @@ overlays:
     - repo: paradigmxyz/centaur
       ref: "abe1d95e8289d362364a31677b01623611927144"
       visibility: public
-    # Raava overlay pinned to feat/rust-production-cutover @ fb22d3e9 (PR #19:
-    # Proxmox destructive-op approval policy in the chief persona + org
-    # overlay prompt). Drives both repo-cache REPOSITORY_REFS and api-rs
-    # KUBERNETES_TOOLS_EXTRA_SOURCES.
+    # Raava overlay pinned to feat/honcho-memory-tool @ 7374c155 (PR #21:
+    # chief persona learns the platform-provided Honcho memory). Repin to the
+    # merge sha when the PR lands. Drives both repo-cache REPOSITORY_REFS and
+    # api-rs KUBERNETES_TOOLS_EXTRA_SOURCES.
     - repo: raava-solutions/centaur
-      ref: "fb22d3e93e11c30a3261f2b63ba7ca91022ca15e"
+      ref: "7374c155c18e1898eb108862475cc63fc0bd2264"
       toolsSubdir: overlays/raava-internal/tools
       skillsSubdir: overlays/raava-internal/.agents/skills
       workflowsSubdir: overlays/raava-internal/workflows
+    # Surgical third source: publishes ONLY tools/memory/honcho from the fork
+    # into sandboxes (workflows/skills disabled so the fork tree cannot shadow
+    # the base repo's). The fork's tools/ tree is NOT used as the base source
+    # because it has drifted from the upstream pin (abe1d95e) and shadowing it
+    # in would silently swap every base tool. Ref pinned to the honcho tool
+    # branch head; repin to the merge sha when the PR lands.
+    - repo: raava-solutions/centaur
+      ref: "e0e9c16c1b387180dfdaaec0ee173ecdf07116af"
+      toolsSubdir: tools/memory
+      workflowsSubdir: ""
+      skillsSubdir: ""
 
 # Raava sandbox system prompt, rendered into a ConfigMap for api-rs. Populate
 # with --set-file so this file never drifts from the source.
@@ -94,10 +108,10 @@ apiRs:
   image:
     repository: centaur-api-rs
     <<: *release
-    # api-rs runs the wave-2 build (PR #14 empty-input_lines 400 rejection +
-    # PR #15 pi runtime support, carries migration 0055). Repin to a
-    # release tag once a full 0.1.141 image set is side-loaded.
-    tag: "0.1.141-90a244bb"
+    # api-rs runs the Honcho platform-memory build (PR #21: auto write-back +
+    # context injection from feat/honcho-memory-tool). Repin to the merge sha
+    # (or release tag) once the PR lands and the image is rebuilt.
+    tag: "0.1.141-7374c155"
   runMigrations: true
   syncInfraSecrets: true
   # 1Password vault the registered tool-secret sources resolve op:// refs from
@@ -111,11 +125,16 @@ apiRs:
   sandboxWarmPoolSize: 1
   extraEnv:
     CENTAUR_DEFAULT_PERSONA: chief
+    # Platform-level Honcho peer memory (api-rs-side): mirrors every turn into
+    # Honcho and injects the requester's derived context into each executed
+    # turn. Base URL + workspace ride the out-of-band centaur-infra-env Secret
+    # (already in api-rs env via envFrom); this flag is the on/off switch.
+    HONCHO_ENABLED: "true"
     # Extra sandbox passthrough names on top of the 32 the chart renders
     # from apiRs.etl.* (the chart appends these to SESSION_SANDBOX_PASSTHROUGH_ENV).
     # These keys hold credentials the in-sandbox infra tools need; values come
     # from the out-of-band centaur-infra-env Secret (not Helm-managed).
-    SESSION_SANDBOX_PASSTHROUGH_ENV: "CENTAUR_GITHUB_APP_ID,CENTAUR_GITHUB_APP_PEM,CENTAUR_TAILSCALE_CLIENT_ID,CENTAUR_TAILSCALE_CLIENT_SECRET,CENTAUR_TAILSCALE_AUDIT_CLIENT_ID,CENTAUR_TAILSCALE_AUDIT_CLIENT_SECRET,RBE_API_TOKEN,CENTAUR_PROXMOX_TOKEN_ID,CENTAUR_PROXMOX_TOKEN_SECRET,CENTAUR_PROXMOX_BASE_URL"
+    SESSION_SANDBOX_PASSTHROUGH_ENV: "CENTAUR_GITHUB_APP_ID,CENTAUR_GITHUB_APP_PEM,CENTAUR_TAILSCALE_CLIENT_ID,CENTAUR_TAILSCALE_CLIENT_SECRET,CENTAUR_TAILSCALE_AUDIT_CLIENT_ID,CENTAUR_TAILSCALE_AUDIT_CLIENT_SECRET,RBE_API_TOKEN,CENTAUR_PROXMOX_TOKEN_ID,CENTAUR_PROXMOX_TOKEN_SECRET,CENTAUR_PROXMOX_BASE_URL,HONCHO_BASE_URL,HONCHO_WORKSPACE"
   resources:
     requests:
       cpu: 250m
@@ -312,3 +331,55 @@ agentSandbox:
 #    build 401s/deserialization-fails against the deployed console, and the
 #    console API key is IRON_CONTROL_INITIAL_API_KEY in centaur-infra-env
 #    (not IRON_MANAGEMENT_API_KEY).
+#
+# 7. HONCHO_API_KEY in the 1Password Connect vault (item id
+#    wggcvucf7vtkqyb7k3z6nwc4oi, title HONCHO_API_KEY, field credential) +
+#    HONCHO_BASE_URL/HONCHO_WORKSPACE in centaur-infra-env: the `honcho` tool
+#    (tools/memory/honcho) connects sandboxes to the self-hosted Honcho
+#    instance (LXC 116 on pve-02, Honcho 3.2.0, v3 API) at
+#    https://honcho.raava.dev — nginx on the LXC fronts
+#    127.0.0.1:8000 with a Let's Encrypt cert on the tailnet address
+#    100.85.65.58. honcho.raava.dev resolves via PUBLIC DNS to that tailnet
+#    IP, so NO CoreDNS NodeHosts entry is needed (unlike items 1/3).
+#    CORRECTION (2026-10-10): sandbox pods can NOT dial tailnet addresses
+#    directly — the per-sandbox egress policy rejects them (RST). The proxy
+#    sidecar dials on the sandbox's behalf, and 100.85.65.58/32 is in
+#    ironProxy.upstreamAllowCidrs above for exactly this reason. (api-rs's own
+#    egress policy allows TCP 443 anywhere, so the api-rs-side platform
+#    integration in item 8 needs no such entry.) Honcho runs with
+#    AUTH_USE_AUTH=false, so the API key is a placeholder today — the CLI
+#    always sends `Authorization: Bearer` and iron-proxy injects the vault
+#    value for honcho.raava.dev, so enabling Honcho auth later is a vault
+#    edit only. Registered out of band with:
+#      centaur-perms --tools-dir tools --source-policy onepassword-connect \
+#        --op-vault Engineering roles grant infra --tool honcho
+#    which created the static secret tool-honcho-honcho-api-key
+#    (ssr_vuPAylCQ, inject Authorization header, host honcho.raava.dev,
+#    source op://Engineering/HONCHO_API_KEY/credential) granted to the infra
+#    role. HONCHO_BASE_URL=https://honcho.raava.dev and HONCHO_WORKSPACE=centaur
+#    were added to centaur-infra-env and to SESSION_SANDBOX_PASSTHROUGH_ENV
+#    above (the live api-rs Deployment was kubectl-patched with the same
+#    change, which triggered a rolling restart — keep this values entry or
+#    the next helm upgrade silently drops sandbox Honcho config). Peer id
+#    convention: slack:<slack-user-id> for requesters, agent:<persona> for
+#    agents; session id = the centaur thread key. Honcho ids only allow
+#    [a-zA-Z0-9_-], so the tool sanitizes `:` and `.` to `-` — the stored
+#    ids read slack-U0123ABC / slack-C0TEST12345-1791670752-873056.
+#
+# 8. Platform-level Honcho memory in api-rs (HONCHO_ENABLED=true in
+#    apiRs.extraEnv above): centaur-session-runtime mirrors every chat turn
+#    into Honcho (user messages from the append path, the final answer from
+#    the execution terminal event) and injects the requester's derived peer
+#    context into each executed user turn as a `# Memory Context (Honcho)`
+#    block. api-rs reaches Honcho directly (no iron-proxy) at the same
+#    https://honcho.raava.dev from item 7 — HONCHO_BASE_URL/HONCHO_WORKSPACE
+#    are already in the api-rs pod env via the centaur-infra-env envFrom, so
+#    no extra secret wiring was needed; HONCHO_API_KEY is unset because the
+#    instance runs AUTH_USE_AUTH=false (nginx binds only the tailnet address
+#    100.85.65.58:443). All calls are best-effort with short timeouts: Honcho
+#    being down never fails a turn (logged as honcho_* warn events). Peer ids
+#    are sanitized onto Honcho's [a-zA-Z0-9_-] alphabet exactly like the tool
+#    (slack:U… -> slack-U…), so platform-stored and tool-stored messages land
+#    on the same peers/sessions. Honcho LXC 116 ops: docker-compose v1 at
+#    /bin/docker-compose, project /opt/honcho — the api service must stay
+#    bound to 127.0.0.1:8000; nginx (sites-available/honcho) fronts it.
