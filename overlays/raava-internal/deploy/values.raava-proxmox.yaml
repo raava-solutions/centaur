@@ -75,12 +75,11 @@ overlays:
     - repo: paradigmxyz/centaur
       ref: "abe1d95e8289d362364a31677b01623611927144"
       visibility: public
-    # Raava overlay pinned to feat/honcho-memory-tool @ 7374c155 (PR #21:
-    # chief persona learns the platform-provided Honcho memory). Repin to the
-    # merge sha when the PR lands. Drives both repo-cache REPOSITORY_REFS and
-    # api-rs KUBERNETES_TOOLS_EXTRA_SOURCES.
+    # Raava overlay pinned to feat/rust-production-cutover @ dbad66c8 (PR #21
+    # merge: Honcho platform memory + chief persona prompt). Drives both
+    # repo-cache REPOSITORY_REFS and api-rs KUBERNETES_TOOLS_EXTRA_SOURCES.
     - repo: raava-solutions/centaur
-      ref: "7374c155c18e1898eb108862475cc63fc0bd2264"
+      ref: "dbad66c87475eca38ccdbc2ed0c835e7852f5211"
       toolsSubdir: overlays/raava-internal/tools
       skillsSubdir: overlays/raava-internal/.agents/skills
       workflowsSubdir: overlays/raava-internal/workflows
@@ -88,10 +87,9 @@ overlays:
     # into sandboxes (workflows/skills disabled so the fork tree cannot shadow
     # the base repo's). The fork's tools/ tree is NOT used as the base source
     # because it has drifted from the upstream pin (abe1d95e) and shadowing it
-    # in would silently swap every base tool. Ref pinned to the honcho tool
-    # branch head; repin to the merge sha when the PR lands.
+    # in would silently swap every base tool.
     - repo: raava-solutions/centaur
-      ref: "e0e9c16c1b387180dfdaaec0ee173ecdf07116af"
+      ref: "dbad66c87475eca38ccdbc2ed0c835e7852f5211"
       toolsSubdir: tools/memory
       workflowsSubdir: ""
       skillsSubdir: ""
@@ -108,10 +106,9 @@ apiRs:
   image:
     repository: centaur-api-rs
     <<: *release
-    # api-rs runs the Honcho platform-memory build (PR #21: auto write-back +
-    # context injection from feat/honcho-memory-tool). Repin to the merge sha
-    # (or release tag) once the PR lands and the image is rebuilt.
-    tag: "0.1.141-7374c155"
+    # api-rs runs the PR #21 merge build (Honcho platform memory: auto
+    # write-back + context injection).
+    tag: "0.1.141-dbad66c8"
   runMigrations: true
   syncInfraSecrets: true
   # 1Password vault the registered tool-secret sources resolve op:// refs from
