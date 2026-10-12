@@ -93,6 +93,11 @@ pub struct IronProxyConfig {
     /// live on private networks (for example a tailnet service mesh) whose
     /// traffic still must transit the proxy.
     pub upstream_allow_cidrs: Vec<String>,
+    /// Where the per-sandbox egress policy sends approval-tool calls: this
+    /// control plane's pods (api_pod_labels) on the service port. Sandboxes
+    /// must reach api-rs directly — the paired proxy only speaks TLS to
+    /// upstreams and rejects plain-HTTP forwards.
+    pub api_service_port: u16,
     pub op_connect_app_name: String,
     pub op_connect_port: u16,
     pub api_pod_labels: BTreeMap<String, String>,
@@ -117,6 +122,7 @@ impl IronProxyConfig {
             extra_env: BTreeMap::new(),
             upstream_deny_cidrs: Vec::new(),
             upstream_allow_cidrs: Vec::new(),
+            api_service_port: 8080,
             op_connect_app_name: "onepassword-connect".to_owned(),
             op_connect_port: 8080,
             api_pod_labels: BTreeMap::from([(
@@ -1379,6 +1385,12 @@ pub(crate) fn apply_proxy_env(spec: &mut SandboxSpec, resolved: &ResolvedIronPro
     // collector; routing them through iron-proxy fails (plain-HTTP forwards
     // are rejected), so the endpoint host always bypasses the proxy.
     no_proxy_extra.extend(otlp_endpoint_hosts(spec));
+    // Same plain-HTTP rejection applies to api-rs itself: the approval tool
+    // and the tool SDK's session-context reads call $CENTAUR_API_URL directly
+    // (the per-sandbox egress policy allows it), never through the proxy.
+    if let Some(host) = env_value(spec, "CENTAUR_API_URL").and_then(host_from_url) {
+        no_proxy_extra.push(host);
+    }
     for (name, value) in proxy_env(&resolved.proxy_host, resolved.proxy_port, &no_proxy_extra) {
         set_env(spec, &name, &value);
     }
@@ -1694,13 +1706,23 @@ fn build_iron_proxy_network_policies(
     observability_enabled: bool,
 ) -> Vec<NetworkPolicy> {
     let sandbox_to_proxy_ports = sandbox_to_proxy_ports(resolved);
-    let sandbox_egress = vec![
+    let mut sandbox_egress = vec![
         egress_to(
             vec![pod_peer(iron_proxy_labels(id, observability_enabled))],
             sandbox_to_proxy_ports.clone(),
         ),
         dns_egress_rule(),
     ];
+    // The approval tool (and the tool SDK's session-context reads) call api-rs
+    // directly over plain HTTP: the paired proxy only speaks TLS to upstreams
+    // and rejects plain-HTTP forwards, and the api-rs ClusterIP sits inside
+    // the pod CIDR no public-egress rule would match anyway.
+    if !iron_proxy.api_pod_labels.is_empty() {
+        sandbox_egress.push(egress_to(
+            vec![pod_peer(iron_proxy.api_pod_labels.clone())],
+            vec![network_port(iron_proxy.api_service_port)],
+        ));
+    }
     vec![
         NetworkPolicy {
             metadata: object_meta(
@@ -2958,15 +2980,29 @@ mod tests {
                 .iter()
                 .any(|rule| rule_allows_namespace_port(rule, "laminar", 8000))
         );
-        assert!(!sandbox_egress.iter().any(|rule| {
-            rule.to.as_ref().is_some_and(|peers| {
-                peers.iter().any(|peer| {
-                    peer.pod_selector.as_ref().is_some_and(|selector| {
-                        selector.match_labels.as_ref() == Some(&iron_proxy.api_pod_labels)
+        // The only in-cluster pod egress a sandbox gets beyond its proxy is
+        // the control plane's service port, so the approval tool can reach
+        // api-rs directly (plain HTTP; the proxy rejects such forwards). It
+        // must be exactly one rule, and exactly that port — nothing else.
+        let api_rules: Vec<_> = sandbox_egress
+            .iter()
+            .filter(|rule| {
+                rule.to.as_ref().is_some_and(|peers| {
+                    peers.iter().any(|peer| {
+                        peer.pod_selector.as_ref().is_some_and(|selector| {
+                            selector.match_labels.as_ref() == Some(&iron_proxy.api_pod_labels)
+                        })
                     })
                 })
             })
-        }));
+            .collect();
+        assert_eq!(api_rules.len(), 1);
+        let api_ports = api_rules[0].ports.as_deref().unwrap_or_default();
+        assert_eq!(api_ports.len(), 1);
+        assert_eq!(
+            api_ports[0].port,
+            Some(IntOrString::Int(i32::from(iron_proxy.api_service_port)))
+        );
 
         let proxy_egress = policies[1].spec.as_ref().unwrap().egress.as_ref().unwrap();
         assert!(
@@ -3386,7 +3422,9 @@ mod tests {
     }
 
     #[test]
-    fn apply_proxy_env_does_not_add_api_host_to_no_proxy() {
+    fn apply_proxy_env_adds_api_host_to_no_proxy() {
+        // api-rs is reached directly (plain HTTP): the proxy rejects
+        // plain-HTTP forwards, so the API host must bypass the proxy env.
         let mut spec = SandboxSpec::new("centaur-agent:latest")
             .env("CENTAUR_API_URL", "http://api:8080")
             .env("NO_PROXY", "custom.internal");
@@ -3401,8 +3439,8 @@ mod tests {
                 .map(|env| env.value.clone())
                 .unwrap();
             assert!(
-                !value.split(',').any(|host| host == "api"),
-                "{name} should not contain the API host: {value}"
+                value.split(',').any(|host| host == "api"),
+                "{name} should contain the API host: {value}"
             );
             assert!(
                 value.split(',').any(|host| host == "custom.internal"),

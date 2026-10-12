@@ -196,6 +196,13 @@ impl AppState {
             ApiError::BadRequest("database-backed admin routes are not enabled".to_owned())
         })
     }
+
+    /// Pool for the approval routes (agents' approval tool + the slackbot's
+    /// approval delivery/decision path). Separate accessor so the approvals
+    /// module can stay in its own file.
+    pub(crate) fn approvals_pool(&self) -> Result<PgPool, ApiError> {
+        self.pool()
+    }
 }
 
 const MAX_WEBHOOK_BODY_BYTES: usize = 1024 * 1024;
@@ -258,6 +265,22 @@ pub fn build_router_with_app_state(state: AppState) -> Router {
             post(interrupt_session_execution),
         )
         .route("/api/session/{thread_key}/events", get(stream_events))
+        .route(
+            "/api/approvals",
+            post(crate::approvals::create_approval).get(crate::approvals::list_approvals),
+        )
+        .route(
+            "/api/approvals/{approval_id}",
+            get(crate::approvals::get_approval),
+        )
+        .route(
+            "/api/approvals/{approval_id}/decide",
+            post(crate::approvals::decide_approval),
+        )
+        .route(
+            "/api/approvals/{approval_id}/slack-delivery",
+            post(crate::approvals::record_approval_slack_delivery),
+        )
         .route("/api/sandboxes/drain", post(drain_sandboxes))
         .merge(slack_proxy_router())
         .route("/api/workflows/schedules", get(list_workflow_schedules))
@@ -548,6 +571,14 @@ fn route_access(method: &Method, route: &str) -> Option<RouteAccess> {
             capability(Capability::SessionsWrite)
         }
         (&Method::POST, "/api/sandboxes/drain") => capability(Capability::SandboxesDrain),
+        (&Method::POST, "/api/approvals") => capability(Capability::ApprovalsWrite),
+        (&Method::GET, "/api/approvals") | (&Method::GET, "/api/approvals/{approval_id}") => {
+            capability(Capability::ApprovalsRead)
+        }
+        (&Method::POST, "/api/approvals/{approval_id}/decide")
+        | (&Method::POST, "/api/approvals/{approval_id}/slack-delivery") => {
+            capability(Capability::ApprovalsDecide)
+        }
         (&Method::GET, "/api/workflows/schedules")
         | (&Method::GET, "/api/workflows/runs")
         | (&Method::GET, "/api/workflows/runs/{run_id}") => capability(Capability::WorkflowsRead),

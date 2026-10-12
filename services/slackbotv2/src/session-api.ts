@@ -9,6 +9,7 @@ import type {
   SlackbotV2BlockActionPayload,
   JsonValue,
   SlackbotV2ApiAttachment,
+  SlackbotV2ApprovalRequest,
   SlackbotV2ApiMessageLink,
   SlackbotV2ApiMessage,
   SlackbotV2AppendMessagesRequest,
@@ -554,6 +555,124 @@ export async function forwardToSessionApi(
 }
 
 export const WORKFLOW_ACTION_PREFIX = 'centaur.workflow.action:'
+
+// Approval request actions posted by the approval delivery loop; the click is
+// turned into a durable decision at api-rs (one-shot, approver-allowlisted).
+export const APPROVAL_ACTION_PREFIX = 'centaur.approval.action:'
+
+type ApprovalDecision = 'approved' | 'denied'
+
+function approvalApiUrl(options: SlackbotV2Options, suffix: string): URL {
+  return new URL(`/api/approvals${suffix}`, ensureTrailingSlash(options.apiUrl))
+}
+
+async function approvalApiCall(
+  options: SlackbotV2Options,
+  operation: string,
+  action: string,
+  method: 'GET' | 'POST',
+  suffix: string,
+  body?: JsonObject
+): Promise<Response> {
+  return recordSessionApiOperation(
+    operation,
+    () =>
+      fetchWithTimeout(
+        options.fetch ?? globalThis.fetch,
+        approvalApiUrl(options, suffix),
+        {
+          method,
+          headers: apiHeaders(options, body !== undefined),
+          ...(body ? { body: JSON.stringify(body) } : {})
+        },
+        sessionApiTimeoutMs(options),
+        action
+      ),
+    sessionApiTimeoutMs(options),
+    action
+  )
+}
+
+function approvalFromPayload(payload: unknown): SlackbotV2ApprovalRequest {
+  if (!isJsonObject(payload) || !isJsonObject(payload.approval)) {
+    throw new Error('approval API returned an invalid payload')
+  }
+  return payload.approval as unknown as SlackbotV2ApprovalRequest
+}
+
+/** Pending approvals that still need their Slack message posted. */
+export async function listApprovalsAwaitingSlack(
+  options: SlackbotV2Options
+): Promise<SlackbotV2ApprovalRequest[]> {
+  const response = await approvalApiCall(
+    options,
+    'list_approvals_awaiting_slack',
+    'list approvals awaiting Slack delivery',
+    'GET',
+    '?status=pending&awaiting_slack=true'
+  )
+  await ensureApiOk(response, 'list approvals awaiting Slack delivery')
+  const payload: unknown = await response.json()
+  if (!isJsonObject(payload) || !Array.isArray(payload.approvals)) {
+    throw new Error('approval API returned an invalid payload')
+  }
+  return payload.approvals as SlackbotV2ApprovalRequest[]
+}
+
+export async function getApprovalRequest(
+  options: SlackbotV2Options,
+  approvalId: string
+): Promise<SlackbotV2ApprovalRequest> {
+  const response = await approvalApiCall(
+    options,
+    'get_approval',
+    'get approval request',
+    'GET',
+    `/${encodeURIComponent(approvalId)}`
+  )
+  await ensureApiOk(response, 'get approval request')
+  return approvalFromPayload(await response.json())
+}
+
+/** Returns undefined when the request was already decided or expired. */
+export async function decideApprovalRequest(
+  options: SlackbotV2Options,
+  approvalId: string,
+  decision: ApprovalDecision,
+  approver: string
+): Promise<SlackbotV2ApprovalRequest | undefined> {
+  const response = await approvalApiCall(
+    options,
+    'decide_approval',
+    'decide approval request',
+    'POST',
+    `/${encodeURIComponent(approvalId)}/decide`,
+    { approver, decision }
+  )
+  if (response.status === 409) {
+    await response.body?.cancel()
+    return undefined
+  }
+  await ensureApiOk(response, 'decide approval request')
+  return approvalFromPayload(await response.json())
+}
+
+export async function recordApprovalSlackDelivery(
+  options: SlackbotV2Options,
+  approvalId: string,
+  channelId: string,
+  messageTs: string
+): Promise<void> {
+  const response = await approvalApiCall(
+    options,
+    'record_approval_slack_delivery',
+    'record approval Slack delivery',
+    'POST',
+    `/${encodeURIComponent(approvalId)}/slack-delivery`,
+    { channel_id: channelId, message_ts: messageTs }
+  )
+  await ensureApiOk(response, 'record approval Slack delivery')
+}
 
 export async function dispatchSlackBlockAction(
   options: SlackbotV2Options,

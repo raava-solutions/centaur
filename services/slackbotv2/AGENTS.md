@@ -15,6 +15,13 @@ lifecycle, harness formatting, and durable execution state belong in `api-rs`.
 
 - Verify Slack signatures and policy gates before processing an event. Ignore
   bot/self events and unsupported event shapes without creating sessions.
+- Approval requests are durable api-rs state (`approval_requests` table), never
+  thread text. This service posts pending requests into their Slack thread as
+  Block Kit cards (background poll of `GET /api/approvals?awaiting_slack=true`),
+  and only clicks from `APPROVER_SLACK_USER_IDS` may decide; everyone else gets
+  an ephemeral refusal. Decisions are one-shot at api-rs (`POST
+  /api/approvals/{id}/decide` returns 409 once decided/expired — re-read the
+  row and render the recorded state).
 - For user-input webhooks, wait only for the create/append handoff needed to
   make Slack retry a transient failure. Do not hold the webhook open for cold
   sandbox execution or rendering.

@@ -6012,6 +6012,222 @@ describe('slackbotv2', () => {
   })
 })
 
+describe('slackbotv2 approvals', () => {
+  const APPROVAL_ID = `apr_${'a'.repeat(32)}`
+  const APPROVAL = {
+    id: APPROVAL_ID,
+    thread_key: `slack:${CHANNEL_ID}:1700000005.000100`,
+    execution_id: 'exe_approval_test',
+    action_summary: 'qm destroy 410 --purge',
+    action_hash: 'sha256:0123abcd',
+    requester: 'chief',
+    status: 'approved',
+    approver: USER_ID,
+    decided_at: '2026-10-12T00:00:00Z',
+    expires_at: '2026-10-12T00:30:00Z',
+    slack_channel_id: CHANNEL_ID,
+    slack_message_ts: '1700000005.000200',
+    created_at: '2026-10-12T00:00:00Z'
+  }
+
+  function approvalClick(userId: string, action: 'approve' | 'deny'): Record<string, unknown> {
+    return {
+      type: 'block_actions',
+      team: { id: TEAM_ID },
+      user: { id: userId, username: 'tester', team_id: TEAM_ID },
+      channel: { id: CHANNEL_ID },
+      message: { ts: '1700000005.000200', thread_ts: '1700000005.000100' },
+      actions: [
+        {
+          action_id: `centaur.approval.action:${action}`,
+          action_ts: '1700000006.000300',
+          type: 'button',
+          value: APPROVAL_ID
+        }
+      ]
+    }
+  }
+
+  it('records an allowlisted approver decision and re-renders the message in place', async () => {
+    const decisions: Record<string, unknown>[] = []
+    const updates: Record<string, string>[] = []
+    bot = createTestBot({
+      approverSlackUserIds: [USER_ID],
+      fetch: async (input, init) => {
+        const url = String(input)
+        if (url.endsWith(`/api/approvals/${APPROVAL_ID}/decide`)) {
+          decisions.push(JSON.parse(String(init?.body)))
+          return Response.json({ ok: true, approval: APPROVAL })
+        }
+        if (url.endsWith('/chat.update')) {
+          updates.push(Object.fromEntries(new URLSearchParams(String(init?.body))))
+          return Response.json({ ok: true })
+        }
+        return globalThis.fetch(input, init)
+      }
+    })
+    const waits: Promise<unknown>[] = []
+    const response = await bot.app.request(
+      '/api/webhooks/slack/interactions',
+      signedSlackInteraction(approvalClick(USER_ID, 'approve')),
+      {},
+      waitUntilContext(waits)
+    )
+    expect(response.status).toBe(200)
+    await Promise.all(waits)
+    expect(decisions).toEqual([{ approver: USER_ID, decision: 'approved' }])
+    expect(updates).toHaveLength(1)
+    expect(updates[0]?.channel).toBe(CHANNEL_ID)
+    expect(updates[0]?.ts).toBe('1700000005.000200')
+    expect(updates[0]?.blocks).toContain('Approved')
+    expect(updates[0]?.blocks).toContain(`<@${USER_ID}>`)
+    expect(updates[0]?.blocks).not.toContain('centaur.approval.action:')
+  })
+
+  it('refuses a non-approver click without touching the session API', async () => {
+    const apiCalls: string[] = []
+    const ephemerals: Record<string, string>[] = []
+    bot = createTestBot({
+      approverSlackUserIds: [USER_B_ID],
+      fetch: async (input, init) => {
+        const url = String(input)
+        if (url.includes('/api/approvals')) {
+          apiCalls.push(url)
+          return Response.json({ ok: false }, { status: 500 })
+        }
+        if (url.endsWith('/chat.postEphemeral')) {
+          ephemerals.push(Object.fromEntries(new URLSearchParams(String(init?.body))))
+          return Response.json({ ok: true })
+        }
+        return globalThis.fetch(input, init)
+      }
+    })
+    const waits: Promise<unknown>[] = []
+    const response = await bot.app.request(
+      '/api/webhooks/slack/interactions',
+      signedSlackInteraction(approvalClick(USER_ID, 'approve')),
+      {},
+      waitUntilContext(waits)
+    )
+    expect(response.status).toBe(200)
+    await Promise.all(waits)
+    expect(apiCalls.filter(url => url.includes('/decide'))).toHaveLength(0)
+    expect(ephemerals).toEqual([
+      {
+        channel: CHANNEL_ID,
+        user: USER_ID,
+        thread_ts: '1700000005.000100',
+        text: 'Not authorized: only designated approvers can decide this request.'
+      }
+    ])
+  })
+
+  it('renders the durable state when the decision already landed elsewhere', async () => {
+    const updates: Record<string, string>[] = []
+    const recorded = { ...APPROVAL, status: 'denied', approver: USER_B_ID }
+    bot = createTestBot({
+      approverSlackUserIds: [USER_ID],
+      fetch: async (input, init) => {
+        const url = String(input)
+        if (url.endsWith(`/api/approvals/${APPROVAL_ID}/decide`)) {
+          return Response.json(
+            { ok: false, error: 'approval request is already decided or expired' },
+            { status: 409 }
+          )
+        }
+        if (url.endsWith(`/api/approvals/${APPROVAL_ID}`)) {
+          return Response.json({ ok: true, approval: recorded })
+        }
+        if (url.endsWith('/chat.update')) {
+          updates.push(Object.fromEntries(new URLSearchParams(String(init?.body))))
+          return Response.json({ ok: true })
+        }
+        return globalThis.fetch(input, init)
+      }
+    })
+    const waits: Promise<unknown>[] = []
+    const response = await bot.app.request(
+      '/api/webhooks/slack/interactions',
+      signedSlackInteraction(approvalClick(USER_ID, 'approve')),
+      {},
+      waitUntilContext(waits)
+    )
+    expect(response.status).toBe(200)
+    await Promise.all(waits)
+    // The clicker asked to approve, but the recorded decision (denied by
+    // someone else) is what the message must show.
+    expect(updates).toHaveLength(1)
+    expect(updates[0]?.blocks).toContain('Denied')
+    expect(updates[0]?.blocks).toContain(`<@${USER_B_ID}>`)
+  })
+
+  it('posts pending approvals into their thread and records the delivery', async () => {
+    const posts: Record<string, string>[] = []
+    const deliveries: Record<string, unknown>[] = []
+    const pending = {
+      ...APPROVAL,
+      status: 'pending',
+      approver: null,
+      decided_at: null,
+      slack_channel_id: null,
+      slack_message_ts: null
+    }
+    bot = createTestBot({
+      approverSlackUserIds: [USER_ID],
+      approvalPollIntervalMs: 60_000,
+      fetch: async (input, init) => {
+        const url = String(input)
+        if (url.includes('/api/approvals?')) {
+          return Response.json({ ok: true, approvals: [pending] })
+        }
+        if (url.endsWith('/chat.postMessage')) {
+          posts.push(Object.fromEntries(new URLSearchParams(String(init?.body))))
+          return Response.json({ ok: true, ts: '1700000007.000400' })
+        }
+        if (url.endsWith(`/api/approvals/${APPROVAL_ID}/slack-delivery`)) {
+          deliveries.push(JSON.parse(String(init?.body)))
+          return Response.json({ ok: true, approval: pending })
+        }
+        return globalThis.fetch(input, init)
+      }
+    })
+    await waitFor(() => deliveries.length === 1, 5_000)
+    expect(posts).toHaveLength(1)
+    expect(posts[0]?.channel).toBe(CHANNEL_ID)
+    expect(posts[0]?.thread_ts).toBe('1700000005.000100')
+    expect(posts[0]?.blocks).toContain('centaur.approval.action:approve')
+    expect(posts[0]?.blocks).toContain('centaur.approval.action:deny')
+    expect(posts[0]?.blocks).toContain('qm destroy 410 --purge')
+    expect(deliveries).toEqual([{ channel_id: CHANNEL_ID, message_ts: '1700000007.000400' }])
+  })
+
+  it('ignores approval-shaped actions with forged ids without calling the API', async () => {
+    const apiCalls: string[] = []
+    bot = createTestBot({
+      approverSlackUserIds: [USER_ID],
+      fetch: async input => {
+        const url = String(input)
+        if (url.includes('/api/approvals')) apiCalls.push(url)
+        return globalThis.fetch(input)
+      }
+    })
+    const forged = approvalClick(USER_ID, 'approve')
+    ;(forged.actions as Record<string, unknown>[])[0]!.value = 'apr_not-a-real-id'
+    const waits: Promise<unknown>[] = []
+    const response = await bot.app.request(
+      '/api/webhooks/slack/interactions',
+      signedSlackInteraction(forged),
+      {},
+      waitUntilContext(waits)
+    )
+    expect(response.status).toBe(200)
+    await Promise.all(waits)
+    // The background delivery loop may list pending approvals; a forged id
+    // must never reach the decision endpoint.
+    expect(apiCalls.filter(url => url.includes('/decide'))).toHaveLength(0)
+  })
+})
+
 function createTestBot(
   overrides: Partial<Parameters<typeof createSlackbotV2>[0]> = {}
 ): SlackbotV2 {

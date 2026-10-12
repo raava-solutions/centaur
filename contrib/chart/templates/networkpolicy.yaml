@@ -192,11 +192,18 @@ spec:
         - podSelector:
             matchLabels:
 {{ include "centaur.componentSelectorLabels" (dict "root" . "component" "console-worker") | nindent 14 }}
-        # Sandboxes reach authenticated api-rs routes through their paired
-        # iron-proxy; sandbox pods never connect to api-rs directly.
+        # iron-proxy pods reach api-rs on behalf of sandboxes for credentialed
+        # upstream calls; the approval tool additionally calls api-rs directly
+        # from agent sandboxes (plain HTTP — proxies reject such forwards), so
+        # sandbox pods are allowed on the API port too. api-rs still enforces
+        # bearer auth and per-caller capabilities on every route.
         - podSelector:
             matchLabels:
               centaur.ai/iron-proxy: "true"
+        - podSelector:
+            matchLabels:
+              centaur.ai/managed-by: api-rs
+              app.kubernetes.io/name: centaur-sandbox
 {{- range .Values.networkPolicy.apiIngressSourceNamespaces }}
         - namespaceSelector:
             matchLabels:
@@ -206,9 +213,12 @@ spec:
         - protocol: TCP
           port: {{ .Values.apiRs.port }}
 ---
-# Only iron-proxy pods may call api-rs on behalf of sandboxes. api-rs enforces
-# the principal JWT's endpoint capabilities; sandbox pods remain limited to
-# their paired proxy by the per-sandbox policies rendered by api-rs.
+# Only iron-proxy pods may call api-rs on behalf of sandboxes for proxied
+# upstream traffic. Direct plain-HTTP calls (the sandbox approval tool) come
+# from the sandbox pod itself — allowed on the api-rs ingress policy above and
+# by the per-sandbox egress policies api-rs renders — because the paired proxy
+# rejects plain-HTTP forwards. api-rs enforces bearer auth and per-caller
+# capabilities on those routes.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
