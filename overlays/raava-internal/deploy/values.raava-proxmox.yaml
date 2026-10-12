@@ -75,11 +75,11 @@ overlays:
     - repo: paradigmxyz/centaur
       ref: "abe1d95e8289d362364a31677b01623611927144"
       visibility: public
-    # Raava overlay pinned to feat/rust-production-cutover @ dbad66c8 (PR #21
-    # merge: Honcho platform memory + chief persona prompt). Drives both
+    # Raava overlay pinned to feat/rust-production-cutover @ 9e5a2abb (PR #22
+    # merge: durable approval mechanism). Drives both
     # repo-cache REPOSITORY_REFS and api-rs KUBERNETES_TOOLS_EXTRA_SOURCES.
     - repo: raava-solutions/centaur
-      ref: "dbad66c87475eca38ccdbc2ed0c835e7852f5211"
+      ref: "9e5a2abb999248b98bb01fa4dbbe6114352aef69"
       toolsSubdir: overlays/raava-internal/tools
       skillsSubdir: overlays/raava-internal/.agents/skills
       workflowsSubdir: overlays/raava-internal/workflows
@@ -89,14 +89,14 @@ overlays:
     # because it has drifted from the upstream pin (abe1d95e) and shadowing it
     # in would silently swap every base tool.
     - repo: raava-solutions/centaur
-      ref: "dbad66c87475eca38ccdbc2ed0c835e7852f5211"
+      ref: "9e5a2abb999248b98bb01fa4dbbe6114352aef69"
       toolsSubdir: tools/memory
       workflowsSubdir: ""
       skillsSubdir: ""
     # Same surgical pattern for the approval tool (tools/ops holds only
     # approval): durable operator approvals with signed Slack buttons.
     - repo: raava-solutions/centaur
-      ref: "dbad66c87475eca38ccdbc2ed0c835e7852f5211"
+      ref: "9e5a2abb999248b98bb01fa4dbbe6114352aef69"
       toolsSubdir: tools/ops
       workflowsSubdir: ""
       skillsSubdir: ""
@@ -113,9 +113,9 @@ apiRs:
   image:
     repository: centaur-api-rs
     <<: *release
-    # api-rs runs the PR #21 merge build (Honcho platform memory: auto
-    # write-back + context injection).
-    tag: "0.1.141-dbad66c8"
+    # api-rs runs the PR #22 merge build (durable approval mechanism:
+    # approval_requests + /api/approvals + approval-agent caller).
+    tag: "0.1.142-9e5a2abb"
   runMigrations: true
   syncInfraSecrets: true
   # 1Password vault the registered tool-secret sources resolve op:// refs from
@@ -151,10 +151,11 @@ slackbotv2:
   image:
     repository: centaur-slackbotv2
     <<: *release
-    # Slackbotv2 runs the PR #18 build (human thread follow-ups without a
-    # re-mention). Explicit tag rather than the x-release anchor: the anchor is
-    # shared with centaur-iron-proxy, which has no 0.1.141-* side-loaded build.
-    tag: "0.1.141-65ca83f4"
+    # Slackbotv2 runs the PR #22 merge build (approval delivery loop +
+    # signed-button decisions). Explicit tag rather than the x-release anchor:
+    # the anchor is shared with centaur-iron-proxy, which has no 0.1.142-*
+    # side-loaded build.
+    tag: "0.1.142-9e5a2abb"
   userName: centaur
   extraEnv:
     # Slack user IDs allowed to decide approval requests (the approval tool's
