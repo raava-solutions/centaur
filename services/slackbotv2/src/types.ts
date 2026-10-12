@@ -128,10 +128,35 @@ export type SlackbotV2BlockActionPayload = {
   value?: string
 }
 
+export type SlackbotV2ApprovalRequest = {
+  id: string
+  thread_key: string
+  execution_id?: string | null
+  action_summary: string
+  action_hash: string
+  requester: string
+  status: 'pending' | 'approved' | 'denied' | 'expired'
+  approver?: string | null
+  decided_at?: string | null
+  expires_at: string
+  slack_channel_id?: string | null
+  slack_message_ts?: string | null
+  created_at: string
+}
+
 export type SlackbotV2Options = {
   allowedExternalTeamIds?: readonly string[]
   apiKey?: string
   apiUrl: string
+  /**
+   * Slack user IDs allowed to decide approval requests (APPROVER_SLACK_USER_IDS,
+   * comma-separated). Only these users' signed button clicks turn into
+   * decisions; everyone else gets an ephemeral refusal. When empty, approval
+   * delivery and decisions are disabled.
+   */
+  approverSlackUserIds?: readonly string[]
+  /** Poll interval for posting pending approval requests into their Slack threads. */
+  approvalPollIntervalMs?: number
   /** Enable Slack's Agent messaging experience. Must match the app manifest. */
   agentViewEnabled?: boolean
   assistantStatus?: string

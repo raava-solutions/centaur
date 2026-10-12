@@ -39,6 +39,7 @@ import {
 } from './slack-display-text'
 import { slackUserIdForMessage } from './slack-user'
 import {
+  APPROVAL_ACTION_PREFIX,
   collectInitialContext,
   dispatchSlackBlockAction,
   fetchWithTimeout,
@@ -55,6 +56,7 @@ import {
   WORKFLOW_ACTION_PREFIX,
   withSlackApiTimeout
 } from './session-api'
+import { dispatchApprovalAction, startApprovalDeliveryLoop } from './approvals'
 import {
   buildSlackResponseContextBlock,
   defaultModelForHarness,
@@ -334,9 +336,12 @@ export function createSlackbotV2(options: SlackbotV2Options): SlackbotV2 {
   chat.onAction(async event => {
     const payload = slackBlockActionPayload(event)
     const workflowAction = payload.action_id.startsWith(WORKFLOW_ACTION_PREFIX)
+    const approvalAction = payload.action_id.startsWith(APPROVAL_ACTION_PREFIX)
     // Workflow starts deduplicate durably using the Slack click identity.
     // A temporary ingress lease must never acknowledge a lost click.
-    const dedupeKey = workflowAction ? undefined : slackBlockActionDedupeKey(payload)
+    // Approval decisions are one-shot at api-rs (a second click reads back the
+    // recorded decision), so they need no lease either.
+    const dedupeKey = workflowAction || approvalAction ? undefined : slackBlockActionDedupeKey(payload)
     const leaseToken = randomUUID()
     if (
       dedupeKey
@@ -352,6 +357,17 @@ export function createSlackbotV2(options: SlackbotV2Options): SlackbotV2 {
       return
     }
     try {
+      if (approvalAction) {
+        await dispatchApprovalAction(options, payload)
+        traceLog(options, 'slackbotv2_block_action_dispatched', undefined, {
+          action_id: payload.action_id,
+          channel_id: payload.channel_id,
+          message_ts: payload.message_ts,
+          team_id: payload.team_id,
+          thread_ts: payload.thread_ts
+        })
+        return
+      }
       const result = await dispatchSlackBlockAction(options, payload)
       // The workflow owns the message and its final button state. Successful
       // handoff (including redelivery) only needs Slack's native acknowledgment;
@@ -626,10 +642,13 @@ export function createSlackbotV2(options: SlackbotV2Options): SlackbotV2 {
     }
   }
   app.post('/api/webhooks/slack', handleSlackWebhook)
+  app.post('/api/webhooks/slack/interactions', handleSlackWebhook)
   app.post('/api/slack/events', handleSlackWebhook)
   app.post('/api/slack/actions', handleSlackWebhook)
   app.post('/api/slack/options', handleSlackWebhook)
   app.post('/api/slack/commands', handleSlackWebhook)
+
+  startApprovalDeliveryLoop(options)
 
   if (options.recoverRenderObligationsOnStart !== false) {
     scheduleRenderObligationRecovery(chat, state, options, stateConnected)

@@ -93,6 +93,13 @@ overlays:
       toolsSubdir: tools/memory
       workflowsSubdir: ""
       skillsSubdir: ""
+    # Same surgical pattern for the approval tool (tools/ops holds only
+    # approval): durable operator approvals with signed Slack buttons.
+    - repo: raava-solutions/centaur
+      ref: "dbad66c87475eca38ccdbc2ed0c835e7852f5211"
+      toolsSubdir: tools/ops
+      workflowsSubdir: ""
+      skillsSubdir: ""
 
 # Raava sandbox system prompt, rendered into a ConfigMap for api-rs. Populate
 # with --set-file so this file never drifts from the source.
@@ -131,7 +138,7 @@ apiRs:
     # from apiRs.etl.* (the chart appends these to SESSION_SANDBOX_PASSTHROUGH_ENV).
     # These keys hold credentials the in-sandbox infra tools need; values come
     # from the out-of-band centaur-infra-env Secret (not Helm-managed).
-    SESSION_SANDBOX_PASSTHROUGH_ENV: "CENTAUR_GITHUB_APP_ID,CENTAUR_GITHUB_APP_PEM,CENTAUR_TAILSCALE_CLIENT_ID,CENTAUR_TAILSCALE_CLIENT_SECRET,CENTAUR_TAILSCALE_AUDIT_CLIENT_ID,CENTAUR_TAILSCALE_AUDIT_CLIENT_SECRET,RBE_API_TOKEN,CENTAUR_PROXMOX_TOKEN_ID,CENTAUR_PROXMOX_TOKEN_SECRET,CENTAUR_PROXMOX_BASE_URL,HONCHO_BASE_URL,HONCHO_WORKSPACE"
+    SESSION_SANDBOX_PASSTHROUGH_ENV: "CENTAUR_GITHUB_APP_ID,CENTAUR_GITHUB_APP_PEM,CENTAUR_TAILSCALE_CLIENT_ID,CENTAUR_TAILSCALE_CLIENT_SECRET,CENTAUR_TAILSCALE_AUDIT_CLIENT_ID,CENTAUR_TAILSCALE_AUDIT_CLIENT_SECRET,RBE_API_TOKEN,CENTAUR_PROXMOX_TOKEN_ID,CENTAUR_PROXMOX_TOKEN_SECRET,CENTAUR_PROXMOX_BASE_URL,HONCHO_BASE_URL,HONCHO_WORKSPACE,CENTAUR_APPROVAL_API_KEY"
   resources:
     requests:
       cpu: 250m
@@ -149,6 +156,11 @@ slackbotv2:
     # shared with centaur-iron-proxy, which has no 0.1.141-* side-loaded build.
     tag: "0.1.141-65ca83f4"
   userName: centaur
+  extraEnv:
+    # Slack user IDs allowed to decide approval requests (the approval tool's
+    # Approve/Deny buttons). zay's Slack user ID. Anyone else's click gets an
+    # ephemeral refusal and the request stays pending.
+    APPROVER_SLACK_USER_IDS: "U08TZCX8Q2E"
   resources:
     requests:
       cpu: 50m
@@ -380,3 +392,18 @@ agentSandbox:
 #    on the same peers/sessions. Honcho LXC 116 ops: docker-compose v1 at
 #    /bin/docker-compose, project /opt/honcho — the api service must stay
 #    bound to 127.0.0.1:8000; nginx (sites-available/honcho) fronts it.
+#
+# 9. Approval mechanism (PR: approval-as-state + signed Slack buttons):
+#    CENTAUR_APPROVAL_API_KEY in centaur-infra-env (random token, generated
+#    out of band) authenticates the sandbox `approval` tool as api-rs's
+#    `approval-agent` caller — ApprovalsRead/ApprovalsWrite only, never
+#    ApprovalsDecide (decisions come only from slackbotv2's signed-button
+#    path, gated by APPROVER_SLACK_USER_IDS in slackbotv2.extraEnv above).
+#    The name rides SESSION_SANDBOX_PASSTHROUGH_ENV so the raw value lands in
+#    the sandbox env. The tool calls api-rs DIRECTLY (plain HTTP,
+#    trust_env=False): the paired iron-proxy rejects plain-HTTP forwards, so
+#    the per-sandbox egress policy now allows the api-rs pods on apiRs.port
+#    (KUBERNETES_API_SERVICE_PORT, chart-rendered) and the api-rs ingress
+#    policy allows `app.kubernetes.io/name=centaur-sandbox` pods. Slack
+#    interactivity: the Slack app's Interactivity Request URL must point at
+#    <public-origin>/api/webhooks/slack/interactions (same ingress as events).

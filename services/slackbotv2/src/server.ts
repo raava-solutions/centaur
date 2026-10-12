@@ -48,6 +48,12 @@ const options: SlackbotV2Options = {
   apiUrl,
   agentViewEnabled: booleanEnv('SLACKBOTV2_AGENT_VIEW_ENABLED', false),
   apiKey: optionalEnv('SLACKBOT_API_KEY'),
+  // Slack user IDs allowed to decide approval requests. Defaults to the
+  // deployment operator (zay) so a fresh deploy never leaves decisions open to
+  // everyone; set APPROVER_SLACK_USER_IDS explicitly to change the allowlist.
+  approverSlackUserIds:
+    listEnv('APPROVER_SLACK_USER_IDS') ?? ['U08TZCX8Q2E'],
+  approvalPollIntervalMs: optionalNumberEnv('SLACKBOTV2_APPROVAL_POLL_INTERVAL_MS'),
   assistantStatus: optionalEnv('SLACKBOTV2_ASSISTANT_STATUS'),
   activitySummaryStatusEnabled: booleanEnv('SLACKBOTV2_ACTIVITY_SUMMARY_STATUS_ENABLED', false),
   autoJoinCreatedChannels: booleanEnv('SLACKBOTV2_AUTO_JOIN_CREATED_CHANNELS', false),
@@ -118,6 +124,7 @@ console.log(
     event: 'slackbotv2_started',
     service: 'slackbotv2',
     agent_view_enabled: options.agentViewEnabled,
+    approval_delivery_enabled: (options.approverSlackUserIds?.length ?? 0) > 0,
     activity_summary_status_enabled: options.activitySummaryStatusEnabled,
     auto_join_created_channels_enabled: options.autoJoinCreatedChannels,
     message_overrides_strategy: messageOverridesStrategyMode,
@@ -135,6 +142,13 @@ console.log(
 function optionalEnv(name: string): string | undefined {
   const value = process.env[name]?.trim()
   return value ? value : undefined
+}
+
+function listEnv(name: string): string[] | undefined {
+  const value = optionalEnv(name)
+  if (!value) return undefined
+  const entries = value.split(',').map(entry => entry.trim()).filter(Boolean)
+  return entries.length > 0 ? entries : undefined
 }
 
 function requiredEnv(name: string): string {

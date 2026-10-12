@@ -1873,6 +1873,16 @@ struct IronProxyArgs {
     bootstrap_secret_name: Option<String>,
     #[arg(long = "kubernetes-api-pod-label-selector", env = "KUBERNETES_API_POD_LABEL_SELECTOR", value_parser = parse_label_selector_arg)]
     api_pod_label_selector: Option<BTreeMap<String, String>>,
+    /// Service port the per-sandbox egress policy opens toward this control
+    /// plane's pods (direct plain-HTTP calls, e.g. the approval tool; the
+    /// paired proxy rejects plain-HTTP forwards). Must match the chart's
+    /// apiRs.port.
+    #[arg(
+        long = "kubernetes-api-service-port",
+        env = "KUBERNETES_API_SERVICE_PORT",
+        default_value = "8080"
+    )]
+    api_service_port: u16,
 }
 
 impl IronProxyArgs {
@@ -1909,6 +1919,7 @@ impl IronProxyArgs {
         {
             config.api_pod_labels = labels.clone();
         }
+        config.api_service_port = self.api_service_port;
         Ok(config)
     }
 

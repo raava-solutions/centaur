@@ -27,10 +27,13 @@ pub(crate) enum Capability {
     WorkflowsActions,
     AdminArchive,
     AdminSync,
+    ApprovalsRead,
+    ApprovalsWrite,
+    ApprovalsDecide,
 }
 
 impl Capability {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 12] = [
         Self::SessionsRead,
         Self::SessionsWrite,
         Self::SandboxesDrain,
@@ -40,6 +43,9 @@ impl Capability {
         Self::WorkflowsActions,
         Self::AdminArchive,
         Self::AdminSync,
+        Self::ApprovalsRead,
+        Self::ApprovalsWrite,
+        Self::ApprovalsDecide,
     ];
 }
 
@@ -129,13 +135,24 @@ impl ApiAuthConfig {
             let Some(token) = optional_env(spec.env_var) else {
                 continue;
             };
-            let mut capabilities = vec![Capability::SessionsRead, Capability::SessionsWrite];
-            if spec.workflow_events {
-                capabilities.push(Capability::WorkflowsEvents);
-            }
-            if spec.identity == "slackbot" {
-                capabilities.push(Capability::WorkflowsActions);
-            }
+            let capabilities = match spec.capabilities {
+                Some(capabilities) => capabilities.to_vec(),
+                None => {
+                    let mut capabilities =
+                        vec![Capability::SessionsRead, Capability::SessionsWrite];
+                    if spec.workflow_events {
+                        capabilities.push(Capability::WorkflowsEvents);
+                    }
+                    if spec.identity == "slackbot" {
+                        capabilities.push(Capability::WorkflowsActions);
+                        // The slackbot delivers approval requests into threads
+                        // and turns the signed button clicks into decisions.
+                        capabilities.push(Capability::ApprovalsRead);
+                        capabilities.push(Capability::ApprovalsDecide);
+                    }
+                    capabilities
+                }
+            };
             callers.push(static_caller(
                 spec.identity,
                 CallerClass::Ingress,
@@ -177,6 +194,8 @@ impl ApiAuthConfig {
                 Capability::SessionsWrite,
                 Capability::WorkflowsEvents,
                 Capability::WorkflowsActions,
+                Capability::ApprovalsRead,
+                Capability::ApprovalsDecide,
             ],
             Some(&["slack:"]),
         )];
@@ -310,12 +329,14 @@ const INGRESS_SPECS: &[IngressSpec] = &[
         identity: "slackbot",
         platform_prefixes: &["slack:"],
         workflow_events: true,
+        capabilities: None,
     },
     IngressSpec {
         env_var: "DISCORDBOT_API_KEY",
         identity: "discordbot",
         platform_prefixes: &["discord:"],
         workflow_events: false,
+        capabilities: None,
     },
     IngressSpec {
         env_var: "GITHUBBOT_API_KEY",
@@ -327,18 +348,32 @@ const INGRESS_SPECS: &[IngressSpec] = &[
             "github-review:",
         ],
         workflow_events: true,
+        capabilities: None,
     },
     IngressSpec {
         env_var: "LINEARBOT_API_KEY",
         identity: "linearbot",
         platform_prefixes: &["linear:"],
         workflow_events: false,
+        capabilities: None,
     },
     IngressSpec {
         env_var: "TEAMSBOT_API_KEY",
         identity: "teamsbot",
         platform_prefixes: &["teams:"],
         workflow_events: false,
+        capabilities: None,
+    },
+    // Sandboxes' approval tool. Approval-only: no session access at all (the
+    // empty platform-prefix list also fails every `/api/session/*` call
+    // closed), and never the decide capability — decisions come only from the
+    // slackbot's signed-interaction path.
+    IngressSpec {
+        env_var: "CENTAUR_APPROVAL_API_KEY",
+        identity: "approval-agent",
+        platform_prefixes: &[],
+        workflow_events: false,
+        capabilities: Some(&[Capability::ApprovalsRead, Capability::ApprovalsWrite]),
     },
 ];
 
@@ -348,6 +383,9 @@ struct IngressSpec {
     /// Every session thread-key prefix this ingress mints.
     platform_prefixes: &'static [&'static str],
     workflow_events: bool,
+    /// Exact capability set; `None` selects the standard chat-ingress set
+    /// (sessions read/write plus the per-bot extras in `from_env`).
+    capabilities: Option<&'static [Capability]>,
 }
 
 fn static_caller(
@@ -569,14 +607,36 @@ mod tests {
     }
 
     #[test]
-    fn every_ingress_scopes_itself_to_at_least_one_prefix() {
+    fn session_ingress_specs_scope_themselves_to_at_least_one_prefix() {
         for spec in INGRESS_SPECS {
+            if spec.capabilities.is_some() {
+                // Capability-override callers (the sandbox approval agent) hold
+                // no session capabilities at all; their empty prefix list fails
+                // every `/api/session/*` call closed by construction.
+                continue;
+            }
             assert!(
                 !spec.platform_prefixes.is_empty(),
                 "{} would be scoped to no session at all",
                 spec.identity
             );
         }
+    }
+
+    #[test]
+    fn approval_agent_is_approval_only_and_never_decides() {
+        let spec = INGRESS_SPECS
+            .iter()
+            .find(|spec| spec.identity == "approval-agent")
+            .expect("approval-agent ingress spec");
+        assert_eq!(spec.env_var, "CENTAUR_APPROVAL_API_KEY");
+        assert!(spec.platform_prefixes.is_empty());
+        let capabilities = spec.capabilities.expect("explicit capabilities");
+        assert!(capabilities.contains(&Capability::ApprovalsRead));
+        assert!(capabilities.contains(&Capability::ApprovalsWrite));
+        assert!(!capabilities.contains(&Capability::ApprovalsDecide));
+        assert!(!capabilities.contains(&Capability::SessionsRead));
+        assert!(!capabilities.contains(&Capability::SessionsWrite));
     }
 
     #[test]

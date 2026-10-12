@@ -1,5 +1,7 @@
 //! SQLx-backed session repository.
 
+pub mod approvals;
+
 use std::{collections::BTreeMap, str::FromStr, time::Duration};
 
 use centaur_session_core::{
