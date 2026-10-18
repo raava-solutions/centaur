@@ -15,7 +15,8 @@ use std::{
 
 use centaur_iron_control::{IronControlError, Principal, SessionRegistrar};
 use centaur_sandbox_core::{
-    Mount, RepoCacheAccess, ResourceRequirements, SANDBOX_AGENT_HOME, SandboxBackend,
+    Mount, PrivilegedSandboxAccess, PrivilegedSandboxFile, RepoCacheAccess, ResourceRequirements,
+    SANDBOX_AGENT_HOME, SANDBOX_PRIVILEGED_ACCESS_DIR, SANDBOX_SSH_CONFIG_PATH, SandboxBackend,
     SandboxCapabilities as BackendSandboxCapabilities, SandboxError, SandboxFile, SandboxId,
     SandboxIoGuard, SandboxRead, SandboxSpec, SandboxStatus, SandboxWrite,
 };
@@ -27,7 +28,7 @@ use centaur_session_core::{
     ChatDestination, ExecutionStatus, HarnessType, MessageRole,
     SandboxCapabilities as SessionSandboxCapabilities,
     SandboxRepoCacheAccess as SessionRepoCacheAccess, Session, SessionEvent, SessionExecution,
-    SessionMessageInput, ThreadKey,
+    SessionMessageInput, ThreadKey, original_requester_is_approver,
 };
 use centaur_session_sqlx::{
     PgSessionStore, SandboxCapacityCandidate, SessionEventListener, SessionStoreError,
@@ -160,6 +161,34 @@ pub struct SessionRuntime {
     /// so an execution cannot start on a control plane that is about to
     /// exit and release its leases.
     shutting_down: Arc<AtomicBool>,
+    /// Approver-gated privileged sandbox access configuration. `None` leaves
+    /// every sandbox without privileged credentials (the feature is off).
+    privileged_access: Option<PrivilegedSandboxAccessConfig>,
+}
+
+/// Approver-gated privileged sandbox access configuration.
+///
+/// When present, every sandbox bind evaluates the session's immutable
+/// original requester against `approver_user_ids`: a match installs the
+/// credential files from `credentials_dir` into the sandbox together with an
+/// egress allowance for `egress_cidrs` on `egress_port`; everything else is
+/// cleared. Fail-closed: a gated session whose credentials cannot be
+/// installed must not run, and a sandbox without a grant keeps today's
+/// egress.
+#[derive(Clone, Debug)]
+pub struct PrivilegedSandboxAccessConfig {
+    /// Platform user IDs (for example Slack user IDs) whose sessions may hold
+    /// privileged credentials. Matched against the session's immutable
+    /// original requester, never against per-turn metadata. Empty denies
+    /// every grant and clears existing ones.
+    pub approver_user_ids: Vec<String>,
+    /// Directory inside api-rs (a mounted Secret) holding the `id_ed25519`,
+    /// `known_hosts`, and `ssh_config` payload files.
+    pub credentials_dir: std::path::PathBuf,
+    /// Destination CIDRs a gated sandbox may reach on `egress_port`, on top
+    /// of its existing egress.
+    pub egress_cidrs: Vec<String>,
+    pub egress_port: u16,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -901,6 +930,10 @@ struct EnsureSessionSandboxRequest<'a> {
     proxy_labels: &'a BTreeMap<String, String>,
     desired_capabilities: &'a SessionSandboxCapabilities,
     execution_id: &'a str,
+    /// Immutable original requester of the session, captured at first create.
+    /// Approver-gated privileges are evaluated from this, never from the
+    /// per-turn execution metadata.
+    original_requester: Option<&'a Value>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -951,6 +984,7 @@ impl SessionRuntime {
             honcho: None,
             stdout_owner_id: format!("api-rs-{}", uuid::Uuid::new_v4().simple()),
             shutting_down: Arc::new(AtomicBool::new(false)),
+            privileged_access: None,
         }
     }
 
@@ -976,6 +1010,15 @@ impl SessionRuntime {
 
     pub fn with_personas(mut self, personas: PersonaRegistry) -> Self {
         self.personas = Some(Arc::new(personas));
+        self
+    }
+
+    /// Configure approver-gated privileged sandbox access. The gate is
+    /// evaluated from the session's immutable original requester on every
+    /// sandbox bind, so approver-list changes take effect immediately and a
+    /// session that stops matching is cleared on its next bind.
+    pub fn with_privileged_access_config(mut self, config: PrivilegedSandboxAccessConfig) -> Self {
+        self.privileged_access = Some(config);
         self
     }
 
@@ -2264,6 +2307,7 @@ impl SessionRuntime {
                     proxy_labels: &session.proxy_labels,
                     desired_capabilities: &desired_capabilities,
                     execution_id: &execution.execution_id,
+                    original_requester: session.original_requester.as_ref(),
                 })
                 .instrument(execution_trace_span.clone())
                 .await
@@ -2867,6 +2911,7 @@ impl SessionRuntime {
             proxy_labels,
             desired_capabilities,
             execution_id,
+            original_requester,
         } = request;
         let boot_mode = sandbox_boot_mode_for_thread(thread_key, iron_control_principal);
         let span = info_span!(
@@ -3250,7 +3295,149 @@ impl SessionRuntime {
                 "failed to ensure session sandbox"
             );
         }
-        result
+        let sandbox_id = result?;
+        self.reconcile_privileged_access(
+            thread_key,
+            execution_id,
+            original_requester,
+            &SandboxId::new(sandbox_id.as_str()),
+        )
+        .await?;
+        Ok(sandbox_id)
+    }
+
+    /// Reconcile approver-gated privileged sandbox access after a sandbox is
+    /// bound to a session: gated sessions get the credential payload and its
+    /// egress; every other session is cleared. Evaluated from the session's
+    /// immutable original requester and the CURRENT configuration on every
+    /// bind, so a grant can never outlive an approver-list change and a
+    /// warm-pool spare stays keyless until the bind that claims it.
+    ///
+    /// Fail-closed: a gated session whose credentials cannot be installed
+    /// fails the turn; clearing never fails a turn.
+    async fn reconcile_privileged_access(
+        &self,
+        thread_key: &ThreadKey,
+        execution_id: &str,
+        original_requester: Option<&Value>,
+        sandbox_id: &SandboxId,
+    ) -> Result<(), SessionRuntimeError> {
+        let Some(config) = self.privileged_access.as_ref() else {
+            return Ok(());
+        };
+        let gated = original_requester.is_some_and(|snapshot| {
+            original_requester_is_approver(snapshot, &config.approver_user_ids)
+        });
+        if !gated {
+            if let Err(error) = self
+                .sandbox_runtime
+                .manager
+                .clear_privileged_access(sandbox_id)
+                .await
+            {
+                warn!(
+                    component = COMPONENT_SESSION_RUNTIME,
+                    event = "sandbox_privileged_access_clear_failed",
+                    thread_key = %thread_key,
+                    execution_id,
+                    sandbox_id = %sandbox_id.as_str(),
+                    %error,
+                    "failed to clear privileged sandbox access; continuing without a grant"
+                );
+            }
+            return Ok(());
+        }
+        let access = self.privileged_access_payload(config)?;
+        self.sandbox_runtime
+            .manager
+            .install_privileged_access(sandbox_id, &access)
+            .await
+            .inspect_err(|error| {
+                error!(
+                    component = COMPONENT_SESSION_RUNTIME,
+                    event = "sandbox_privileged_access_install_failed",
+                    thread_key = %thread_key,
+                    execution_id,
+                    sandbox_id = %sandbox_id.as_str(),
+                    %error,
+                    "privileged sandbox access install failed; failing the turn closed"
+                );
+            })?;
+        info!(
+            component = COMPONENT_SESSION_RUNTIME,
+            event = "sandbox_privileged_access_installed",
+            thread_key = %thread_key,
+            execution_id,
+            sandbox_id = %sandbox_id.as_str(),
+            egress_cidrs = ?config.egress_cidrs,
+            egress_port = config.egress_port,
+            "privileged sandbox access installed"
+        );
+        Ok(())
+    }
+
+    /// Build the privileged access payload from the configured credential
+    /// directory. Secret bytes go only into the payload handed to the backend;
+    /// they are never logged, persisted in control-plane state, or placed in
+    /// environment variables.
+    fn privileged_access_payload(
+        &self,
+        config: &PrivilegedSandboxAccessConfig,
+    ) -> Result<PrivilegedSandboxAccess, SessionRuntimeError> {
+        let credentials_dir = &config.credentials_dir;
+        let read = |name: &str| -> Result<Vec<u8>, SessionRuntimeError> {
+            std::fs::read(credentials_dir.join(name)).map_err(|error| {
+                SessionRuntimeError::Sandbox(SandboxError::io(format!(
+                    "read privileged access file {name} from {}: {error}",
+                    credentials_dir.display()
+                )))
+            })
+        };
+        let key = read("id_ed25519")?;
+        let known_hosts = read("known_hosts")?;
+        let ssh_config = read("ssh_config")?;
+        for (name, bytes) in [
+            ("id_ed25519", &key),
+            ("known_hosts", &known_hosts),
+            ("ssh_config", &ssh_config),
+        ] {
+            if bytes.is_empty() {
+                return Err(SessionRuntimeError::Sandbox(SandboxError::io(format!(
+                    "privileged access file {name} is empty in {}",
+                    credentials_dir.display()
+                ))));
+            }
+        }
+        Ok(PrivilegedSandboxAccess {
+            files: vec![
+                PrivilegedSandboxFile {
+                    path: format!("{SANDBOX_PRIVILEGED_ACCESS_DIR}/id_ed25519"),
+                    mode: 0o600,
+                    contents: key,
+                },
+                PrivilegedSandboxFile {
+                    path: format!("{SANDBOX_PRIVILEGED_ACCESS_DIR}/known_hosts"),
+                    mode: 0o644,
+                    contents: known_hosts,
+                },
+                PrivilegedSandboxFile {
+                    path: format!("{SANDBOX_PRIVILEGED_ACCESS_DIR}/ssh_config"),
+                    mode: 0o644,
+                    contents: ssh_config,
+                },
+                PrivilegedSandboxFile {
+                    path: SANDBOX_SSH_CONFIG_PATH.to_owned(),
+                    mode: 0o644,
+                    // A stub so plain `ssh <host>` picks up the gated
+                    // configuration; the pinned destinations live in the
+                    // payload's ssh_config.
+                    contents: format!("Include {SANDBOX_PRIVILEGED_ACCESS_DIR}/ssh_config\n")
+                        .into_bytes(),
+                },
+            ],
+            egress_cidrs: config.egress_cidrs.clone(),
+            egress_port: config.egress_port,
+        })
     }
 
     /// Resolve and upsert the principal of the human requesting this turn from
@@ -9124,6 +9311,7 @@ mod tests {
             status: SessionStatus::Idle,
             iron_control_principal: None,
             proxy_labels: BTreeMap::new(),
+            original_requester: None,
             sandbox_last_active_at: Some(now),
             created_at: now,
             updated_at: now,
@@ -10244,6 +10432,7 @@ mod adoption_tests {
                 proxy_labels: &BTreeMap::new(),
                 desired_capabilities: &restricted_capabilities(),
                 execution_id: &execution_id,
+                original_requester: None,
             })
             .await
             .expect("replace sandbox");
@@ -10331,6 +10520,7 @@ mod adoption_tests {
                 proxy_labels: &BTreeMap::new(),
                 desired_capabilities: &restricted_capabilities(),
                 execution_id: &execution_id,
+                original_requester: None,
             })
             .await
             .expect("ensure sandbox");
@@ -10394,6 +10584,7 @@ mod adoption_tests {
                 proxy_labels: &proxy_labels,
                 desired_capabilities: &SessionSandboxCapabilities::default_enabled(),
                 execution_id: &execution_id,
+                original_requester: None,
             })
             .await
             .expect("reuse existing sandbox");
@@ -10451,6 +10642,7 @@ mod adoption_tests {
                     proxy_labels: &proxy_labels,
                     desired_capabilities: &SessionSandboxCapabilities::default_enabled(),
                     execution_id: &execution_id,
+                    original_requester: None,
                 })
                 .await
                 .expect("reuse existing sandbox");
@@ -10520,6 +10712,7 @@ mod adoption_tests {
                 proxy_labels: &BTreeMap::new(),
                 desired_capabilities: &SessionSandboxCapabilities::default_enabled(),
                 execution_id: &execution_id,
+                original_requester: None,
             })
             .await
             .expect("cold create sandbox");
@@ -11268,6 +11461,7 @@ mod adoption_tests {
                 proxy_labels: &BTreeMap::new(),
                 desired_capabilities: &SessionSandboxCapabilities::default_enabled(),
                 execution_id: &execution_id,
+                original_requester: None,
             })
             .await
             .expect("resume failure should fall through to replacement");

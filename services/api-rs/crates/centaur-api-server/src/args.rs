@@ -32,8 +32,8 @@ use centaur_sandbox_local::LocalSandboxBackend;
 use centaur_sandbox_manager::{SandboxReaperConfig, WarmPoolConfig};
 use centaur_session_core::HarnessType;
 use centaur_session_runtime::{
-    PersonaRegistry, SandboxCapacityConfig, SandboxWorkloadMode, SessionEventRetentionConfig,
-    SessionSandboxCleanupConfig,
+    PersonaRegistry, PrivilegedSandboxAccessConfig, SandboxCapacityConfig, SandboxWorkloadMode,
+    SessionEventRetentionConfig, SessionSandboxCleanupConfig,
 };
 use centaur_workflows::{WorkflowHostSandboxRuntime, WorkflowPrincipalRegistrar};
 use clap::{Args as ClapArgs, Parser, ValueEnum};
@@ -92,6 +92,12 @@ impl Args {
 
     pub(crate) fn sandbox_capacity_config(&self) -> Option<SandboxCapacityConfig> {
         self.sandbox.sandbox_capacity_config()
+    }
+
+    /// Approver-gated privileged sandbox access, or `None` when the feature
+    /// is unconfigured (or partially configured, which fails off).
+    pub(crate) fn privileged_access_config(&self) -> Option<PrivilegedSandboxAccessConfig> {
+        self.sandbox.privileged_access_config()
     }
 
     pub(crate) fn sandbox_reaper_config(&self) -> SandboxReaperConfig {
@@ -810,6 +816,8 @@ struct SandboxArgs {
     kubernetes_workflow_dirs: Option<String>,
     #[command(flatten)]
     tools_source: ToolsArgs,
+    #[command(flatten)]
+    privileged_access: PrivilegedAccessArgs,
 }
 
 impl SandboxArgs {
@@ -1466,6 +1474,10 @@ impl SandboxArgs {
         self.tools.resolve_tool_dirs()
     }
 
+    fn privileged_access_config(&self) -> Option<PrivilegedSandboxAccessConfig> {
+        self.privileged_access.config()
+    }
+
     fn warm_pool_config(&self, bootstrap_iron_control_principal: &str) -> Option<WarmPoolConfig> {
         (self.warm_pool_size > 0).then(|| WarmPoolConfig {
             target_size: self.warm_pool_size,
@@ -1883,6 +1895,90 @@ struct IronProxyArgs {
         default_value = "8080"
     )]
     api_service_port: u16,
+}
+
+/// Approver-gated privileged sandbox access (session credentials + egress).
+/// Entirely unconfigured leaves the feature off; partially configured also
+/// leaves it off, with a warning, because no grant can be installed without
+/// every piece.
+#[derive(Debug, ClapArgs)]
+struct PrivilegedAccessArgs {
+    /// Platform user IDs whose sessions may hold privileged credentials.
+    /// Matched against the session's immutable original requester.
+    #[arg(
+        long = "privileged-access-approver-user-ids",
+        env = "SESSION_PRIVILEGED_ACCESS_APPROVER_USER_IDS",
+        value_delimiter = ','
+    )]
+    approver_user_ids: Vec<String>,
+    /// Directory holding the privileged credential files (`id_ed25519`,
+    /// `known_hosts`, `ssh_config`), typically a mounted Secret.
+    #[arg(
+        long = "privileged-access-credentials-dir",
+        env = "SESSION_PRIVILEGED_ACCESS_CREDENTIALS_DIR"
+    )]
+    credentials_dir: Option<PathBuf>,
+    /// Destination CIDRs a gated sandbox may reach on the privileged port,
+    /// in addition to its existing egress.
+    #[arg(
+        long = "privileged-access-egress-cidrs",
+        env = "SESSION_PRIVILEGED_ACCESS_EGRESS_CIDRS",
+        value_delimiter = ','
+    )]
+    egress_cidrs: Vec<String>,
+    /// Destination port for the privileged egress allowance.
+    #[arg(
+        long = "privileged-access-egress-port",
+        env = "SESSION_PRIVILEGED_ACCESS_EGRESS_PORT",
+        default_value_t = 22u16
+    )]
+    egress_port: u16,
+}
+
+impl PrivilegedAccessArgs {
+    /// Build the runtime config only when every required piece is present.
+    /// Values are trimmed and blank entries dropped, so a stray comma can
+    /// never silently change the grant set.
+    fn config(&self) -> Option<PrivilegedSandboxAccessConfig> {
+        let approver_user_ids: Vec<String> = self
+            .approver_user_ids
+            .iter()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .collect();
+        let egress_cidrs: Vec<String> = self
+            .egress_cidrs
+            .iter()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .collect();
+        match (
+            self.credentials_dir.clone(),
+            approver_user_ids.is_empty(),
+            egress_cidrs.is_empty(),
+        ) {
+            (Some(credentials_dir), false, false) => Some(PrivilegedSandboxAccessConfig {
+                approver_user_ids,
+                credentials_dir,
+                egress_cidrs,
+                egress_port: self.egress_port,
+            }),
+            // Entirely unconfigured: the feature is simply off.
+            (None, true, true) => None,
+            _ => {
+                warn!(
+                    event = "privileged_access_config_incomplete",
+                    approver_user_ids = approver_user_ids.len(),
+                    credentials_dir = ?self.credentials_dir,
+                    egress_cidrs = egress_cidrs.len(),
+                    "privileged sandbox access is partially configured; the feature stays \
+                     disabled until approvers, destinations, and the credentials directory \
+                     are all set"
+                );
+                None
+            }
+        }
+    }
 }
 
 impl IronProxyArgs {

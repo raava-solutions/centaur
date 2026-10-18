@@ -464,12 +464,106 @@ pub struct Session {
     /// session's egress proxy is created, repaired, or rebound.
     #[serde(default)]
     pub proxy_labels: BTreeMap<String, String>,
+    /// Immutable requester identity captured from the FIRST create call for
+    /// this session. Unlike `metadata`, which later create-or-reuse calls may
+    /// merge over, this snapshot is never rewritten, so it is the only
+    /// trustworthy identity for gates that must bind to the session's
+    /// original requester (for example approver-gated sandbox credentials).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_requester: Option<Value>,
     /// Last meaningful activity for the currently assigned sandbox. This is
     /// the eviction signal for capacity pressure and intentionally separate
     /// from `updated_at`, which also changes for metadata/status writes.
     pub sandbox_last_active_at: Option<OffsetDateTime>,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
+}
+
+/// Metadata keys copied into [`Session::original_requester`] when a session is
+/// first created. Ingresses set the keys they can verify about the human that
+/// started the thread; unknown or absent keys stay out of the snapshot.
+pub const ORIGINAL_REQUESTER_METADATA_KEYS: &[&str] = &[
+    "slack_user_id",
+    "slack_team_id",
+    "slack_home_team_id",
+    "slack_user_name",
+    "slack_display_name",
+    "slack_user_email",
+    "slack_thread_author_user_id",
+    "slack_thread_author_team_id",
+    "slack_thread_is_reply",
+    "github_handle",
+];
+
+/// Build the immutable requester snapshot for a new session from its create
+/// metadata. Returns `None` when no known requester key is present, so a
+/// session created without a verifiable requester stays ungated forever.
+pub fn original_requester_snapshot(metadata: &Value) -> Option<Value> {
+    let object = metadata.as_object()?;
+    let snapshot: serde_json::Map<String, Value> = ORIGINAL_REQUESTER_METADATA_KEYS
+        .iter()
+        .filter_map(|key| {
+            object
+                .get(*key)
+                .filter(|value| !value.is_null())
+                .map(|value| ((*key).to_owned(), value.clone()))
+        })
+        .collect();
+    if snapshot.is_empty() {
+        None
+    } else {
+        Some(Value::Object(snapshot))
+    }
+}
+
+/// Match an [`Session::original_requester`] snapshot against an approver list
+/// of platform user IDs.
+///
+/// The thread author (root message author) is preferred over the create-turn
+/// author, and the author must belong to the session's home team when one is
+/// recorded, so a foreign-workspace user cannot satisfy an approver gate by
+/// re-using a colliding user ID in a shared channel. A session created from a
+/// thread reply whose root author could not be resolved denies as well: the
+/// poster who triggered the create did not start the thread. Fails closed: a
+/// missing identity, a missing team match, or an empty approver list all deny.
+pub fn original_requester_is_approver(snapshot: &Value, approver_user_ids: &[String]) -> bool {
+    if approver_user_ids.is_empty() {
+        return false;
+    }
+    let thread_is_reply = snapshot
+        .get("slack_thread_is_reply")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let Some(user_id) = snapshot
+        .get("slack_thread_author_user_id")
+        .or_else(|| {
+            if thread_is_reply {
+                // The session was created from a thread reply and the root
+                // author is unknown. The create-turn poster did not start
+                // this thread, so the gate fails closed instead of falling
+                // back to them.
+                None
+            } else {
+                snapshot.get("slack_user_id")
+            }
+        })
+        .and_then(Value::as_str)
+        .filter(|user_id| !user_id.is_empty())
+    else {
+        return false;
+    };
+    let team_id = snapshot
+        .get("slack_thread_author_team_id")
+        .or_else(|| snapshot.get("slack_team_id"))
+        .and_then(Value::as_str);
+    match snapshot
+        .get("slack_home_team_id")
+        .and_then(Value::as_str)
+        .filter(|home_team_id| !home_team_id.is_empty())
+    {
+        Some(home_team_id) if team_id != Some(home_team_id) => false,
+        _ => approver_user_ids.iter().any(|approver| approver == user_id),
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, AsRefStr, Display, EnumString)]

@@ -38,3 +38,25 @@ and the exact command you intend to run, and stop there. Proceed only after
 zay explicitly confirms that exact command in the same thread. Confirmation
 from anyone else does not count, and if a request is ambiguous about target or
 scope, treat it as needing approval and ask rather than guessing.
+
+## Proxmox root SSH — approver-gated access
+
+Threads started by an approver carry root SSH to the five Proxmox nodes
+(pve-01 through pve-05): run `ssh root@pve-01`, and so on. The key, host-key
+pinning, and TCP/22 egress to exactly those five nodes are installed into the
+sandbox automatically; no other SSH destination is reachable.
+
+Read-only and diagnostic SSH commands (uptime, free, df, zpool status,
+journalctl, systemctl status, qm/pct list and config reads) may just run.
+
+SSH is root: it subsumes PVEAdmin and adds shell-level reach. Anything that
+erases data, removes or disables a workload, restarts services, upgrades
+packages, or reboots or shuts down a node follows the same approval protocol
+as destructive Proxmox operations: reply in the current thread with the exact
+target and the exact command, stop there, and proceed only after zay explicitly
+confirms that exact command in the same thread.
+
+If `ssh root@pve-0N` fails with no key or no route, this thread does not carry
+privileged access — say so plainly and use the Proxmox API for non-destructive
+work instead. Do not try to work around the gate by proxying through other
+hosts or asking another thread to run the command.

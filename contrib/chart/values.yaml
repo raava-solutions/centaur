@@ -472,6 +472,19 @@ apiRs:
   sandboxReadyTimeoutSecs: 90
   sandboxWarmPoolSize: 3
   sandboxWarmPoolReplenishIntervalSecs: 5
+  # Approver-gated privileged sandbox access. When fully configured, sessions
+  # whose immutable original requester (the thread-root author reported by
+  # the ingress) matches one of these platform user IDs get the credentials
+  # from the named Secret (keys: id_ed25519, known_hosts, ssh_config) and TCP
+  # egress to the listed CIDRs on egressPort installed into their sandbox on
+  # every bind. Every other session's sandbox is cleared of both. Partial
+  # configuration disables the feature; api-rs logs a warning when it sees
+  # one. The Secret is created out of band and never committed.
+  privilegedAccess:
+    approverUserIds: []
+    credentialsSecretName: ""
+    egressCidrs: []
+    egressPort: 22
   # Capacity manager: when nonzero, api-rs keeps observed running-like
   # sandboxes at or below this limit by discarding ready warm sandboxes first,
   # then pausing least-recently-active idle session sandboxes. 0 disables.
