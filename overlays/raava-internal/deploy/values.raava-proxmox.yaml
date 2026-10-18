@@ -113,9 +113,9 @@ apiRs:
   image:
     repository: centaur-api-rs
     <<: *release
-    # api-rs runs the PR #22 merge build (durable approval mechanism:
-    # approval_requests + /api/approvals + approval-agent caller).
-    tag: "0.1.142-9e5a2abb"
+    # api-rs runs the PR #23 E2E build (approver-gated privileged access:
+    # ingress-attested original requester, bot/app denial, fail-closed clear).
+    tag: "0.1.142-fa692e75"
   runMigrations: true
   syncInfraSecrets: true
   # 1Password vault the registered tool-secret sources resolve op:// refs from
@@ -177,11 +177,11 @@ slackbotv2:
   image:
     repository: centaur-slackbotv2
     <<: *release
-    # Slackbotv2 runs the PR #22 merge build (approval delivery loop +
-    # signed-button decisions). Explicit tag rather than the x-release anchor:
-    # the anchor is shared with centaur-iron-proxy, which has no 0.1.142-*
-    # side-loaded build.
-    tag: "0.1.142-9e5a2abb"
+    # Slackbotv2 runs the PR #23 E2E build (explicit ingress-attested
+    # original_requester on create + bot/app root markers). Explicit tag rather
+    # than the x-release anchor: the anchor is shared with centaur-iron-proxy,
+    # which has no 0.1.142-* side-loaded build.
+    tag: "0.1.142-fa692e75"
   userName: centaur
   extraEnv:
     # Slack user IDs allowed to decide approval requests (the approval tool's
@@ -221,11 +221,13 @@ sandbox:
   image:
     repository: centaur-agent
     <<: *release
-    # Sandboxes run the wave-2 build + PR #16/#17 (codex usage-limit fallback:
-    # userMessage echo no longer disables the guard; the thread is forked onto
-    # the zap provider since resume cannot switch a loaded thread's provider).
-    # Repin to the release tag once a full 0.1.141 image set is side-loaded.
-    tag: "0.1.141-fba1f03a"
+    # Sandboxes run the PR #23 E2E build, which is the first image to ship
+    # openssh-client (the privileged-access grant needs the ssh client in the
+    # sandbox). Carries the wave-2 build + PR #16/#17 codex usage-limit
+    # fallback (userMessage echo no longer disables the guard; the thread is
+    # forked onto the zap provider since resume cannot switch a loaded
+    # thread's provider).
+    tag: "0.1.142-fa692e75"
   # codex | amp | claudecode | pi. Must agree with the agent image's default CMD
   # and with the iron-proxy auth fragment api-rs registers. Flip to `pi` only
   # together with a sandbox image build that ships the pi harness-server
