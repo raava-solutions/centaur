@@ -1,9 +1,61 @@
 use async_trait::async_trait;
 use std::collections::BTreeMap;
+use std::fmt;
 
 use crate::{
     ObservedSandbox, SandboxHandle, SandboxId, SandboxIo, SandboxResult, SandboxSpec, SandboxStatus,
 };
+
+/// One file to install into a running sandbox as part of privileged access.
+#[derive(Clone, Eq, PartialEq)]
+pub struct PrivilegedSandboxFile {
+    /// Absolute destination path inside the sandbox.
+    pub path: String,
+    /// POSIX permission bits applied to the installed file (e.g. `0o600`).
+    pub mode: u32,
+    pub contents: Vec<u8>,
+}
+
+/// Privileged credentials installed into a gated sandbox together with the
+/// exact extra egress the sandbox gains alongside them.
+///
+/// The caller (session runtime) decides who is gated; the backend only
+/// materializes the payload. Keeping files and egress in one object means a
+/// sandbox can never hold the credentials without the egress, or the reverse.
+#[derive(Clone, Eq, PartialEq)]
+pub struct PrivilegedSandboxAccess {
+    pub files: Vec<PrivilegedSandboxFile>,
+    /// Destination CIDRs the sandbox may reach on `egress_port` in addition
+    /// to its normal egress (for example hypervisor management addresses).
+    pub egress_cidrs: Vec<String>,
+    pub egress_port: u16,
+}
+
+// Manual Debug: payload contents are credential material. Redact the file
+// bytes so `?access`, `{:?}` logs, and error chains can never print key
+// material while still showing structure (paths, modes, sizes).
+impl fmt::Debug for PrivilegedSandboxFile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivilegedSandboxFile")
+            .field("path", &self.path)
+            .field("mode", &self.mode)
+            .field(
+                "contents",
+                &format!("<redacted {} bytes>", self.contents.len()),
+            )
+            .finish()
+    }
+}
+
+impl fmt::Debug for PrivilegedSandboxAccess {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivilegedSandboxAccess")
+            .field("files", &self.files)
+            .field("egress_cidrs", &self.egress_cidrs)
+            .field("egress_port", &self.egress_port)
+            .finish()
+    }
+}
 
 #[async_trait]
 /// Backend-neutral lifecycle and byte-I/O operations for one sandbox runtime.
@@ -101,5 +153,33 @@ pub trait SandboxBackend: Send + Sync {
         _grace: std::time::Duration,
     ) -> SandboxResult<BTreeMap<String, u32>> {
         Ok(BTreeMap::new())
+    }
+
+    /// Install privileged credentials into a RUNNING sandbox and grant the
+    /// matching egress allowance. Idempotent: reinstalling an identical
+    /// payload must be a no-op, and a sandbox that never received the payload
+    /// must stay without it (warm spares stay keyless until binding).
+    ///
+    /// Backends without post-create in-sandbox access return `Unsupported`;
+    /// the caller is expected to fail the turn closed rather than proceed
+    /// without the credentials.
+    async fn install_privileged_access(
+        &self,
+        _id: &SandboxId,
+        _access: &PrivilegedSandboxAccess,
+    ) -> SandboxResult<()> {
+        Err(crate::SandboxError::Unsupported {
+            backend: self.name(),
+            operation: "install_privileged_access",
+        })
+    }
+
+    /// Remove privileged credentials and the matching egress allowance from
+    /// a sandbox. Absence of a grant or a sandbox already removed by teardown
+    /// is success. A failure to remove a grant from a live sandbox must be
+    /// returned so the runtime can fail the turn closed instead of silently
+    /// retaining revoked access.
+    async fn clear_privileged_access(&self, _id: &SandboxId) -> SandboxResult<()> {
+        Ok(())
     }
 }

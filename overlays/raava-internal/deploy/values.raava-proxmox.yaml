@@ -113,9 +113,9 @@ apiRs:
   image:
     repository: centaur-api-rs
     <<: *release
-    # api-rs runs the PR #22 merge build (durable approval mechanism:
-    # approval_requests + /api/approvals + approval-agent caller).
-    tag: "0.1.142-9e5a2abb"
+    # api-rs runs the PR #23 E2E build (approver-gated privileged access:
+    # ingress-attested original requester, bot/app denial, fail-closed clear).
+    tag: "0.1.142-fa692e75"
   runMigrations: true
   syncInfraSecrets: true
   # 1Password vault the registered tool-secret sources resolve op:// refs from
@@ -127,6 +127,32 @@ apiRs:
   # Sized for the 8 GiB / 2 vCPU VM shared with console + postgres. Raise the
   # warm pool only after observing steady-state memory with console running.
   sandboxWarmPoolSize: 1
+  # Approver-gated privileged sandbox access: sessions whose immutable original
+  # requester (thread-root author) is zay (U08TZCX8Q2E) get root SSH credentials
+  # to the Proxmox nodes installed into their sandbox on every bind, plus
+  # TCP/22 egress to the five nodes' LAN addresses. The credentials Secret
+  # (keys id_ed25519 / known_hosts / ssh_config) is created out of band and is
+  # never committed. Partial configuration elsewhere in this file stays inert:
+  # the chart only mounts the Secret and passes grant settings when approvers,
+  # destinations, and the Secret name are all present. Removing the list still
+  # causes api-rs to clear any existing grant on the next sandbox bind.
+  privilegedAccess:
+    approverUserIds:
+      - U08TZCX8Q2E
+    credentialsSecretName: centaur-privileged-access
+    # The five Proxmox nodes' cluster-LAN (corosync) addresses, NOT their
+    # tailnet addresses: Tailscale SSH is enabled on pve-01..pve-04, so
+    # tailscaled answers :22 on the tailnet IP and authorizes by tailnet ACL,
+    # bypassing authorized_keys and its from= pin. On the LAN, plain sshd
+    # answers and the key line pins from="10.200.160.160" (centaur-k3s, which
+    # SNATs sandbox pod egress to its LAN address).
+    egressCidrs:
+      - 10.200.160.152/32 # pve-01
+      - 10.200.160.153/32 # pve-02
+      - 10.200.160.166/32 # pve-03
+      - 10.200.160.214/32 # pve-04
+      - 10.200.160.212/32 # pve-05
+    egressPort: 22
   extraEnv:
     CENTAUR_DEFAULT_PERSONA: chief
     # Platform-level Honcho peer memory (api-rs-side): mirrors every turn into
@@ -151,11 +177,11 @@ slackbotv2:
   image:
     repository: centaur-slackbotv2
     <<: *release
-    # Slackbotv2 runs the PR #22 merge build (approval delivery loop +
-    # signed-button decisions). Explicit tag rather than the x-release anchor:
-    # the anchor is shared with centaur-iron-proxy, which has no 0.1.142-*
-    # side-loaded build.
-    tag: "0.1.142-9e5a2abb"
+    # Slackbotv2 runs the PR #23 E2E build (explicit ingress-attested
+    # original_requester on create + bot/app root markers). Explicit tag rather
+    # than the x-release anchor: the anchor is shared with centaur-iron-proxy,
+    # which has no 0.1.142-* side-loaded build.
+    tag: "0.1.142-fa692e75"
   userName: centaur
   extraEnv:
     # Slack user IDs allowed to decide approval requests (the approval tool's
@@ -195,11 +221,13 @@ sandbox:
   image:
     repository: centaur-agent
     <<: *release
-    # Sandboxes run the wave-2 build + PR #16/#17 (codex usage-limit fallback:
-    # userMessage echo no longer disables the guard; the thread is forked onto
-    # the zap provider since resume cannot switch a loaded thread's provider).
-    # Repin to the release tag once a full 0.1.141 image set is side-loaded.
-    tag: "0.1.141-fba1f03a"
+    # Sandboxes run the PR #23 E2E build, which is the first image to ship
+    # openssh-client (the privileged-access grant needs the ssh client in the
+    # sandbox). Carries the wave-2 build + PR #16/#17 codex usage-limit
+    # fallback (userMessage echo no longer disables the guard; the thread is
+    # forked onto the zap provider since resume cannot switch a loaded
+    # thread's provider).
+    tag: "0.1.142-fa692e75"
   # codex | amp | claudecode | pi. Must agree with the agent image's default CMD
   # and with the iron-proxy auth fragment api-rs registers. Flip to `pi` only
   # together with a sandbox image build that ships the pi harness-server
@@ -408,3 +436,21 @@ agentSandbox:
 #    policy allows `app.kubernetes.io/name=centaur-sandbox` pods. Slack
 #    interactivity: the Slack app's Interactivity Request URL must point at
 #    <public-origin>/api/webhooks/slack/interactions (same ingress as events).
+#
+# 10. Approver-gated Proxmox root SSH (apiRs.privilegedAccess above): the
+#     k8s Secret `centaur-privileged-access` (keys id_ed25519, known_hosts,
+#     ssh_config) is created out of band and NEVER committed; the ed25519
+#     keypair lives in the 1Password Engineering vault as
+#     CENTAUR_PROXMOX_ROOT_SSH (SSH Key item, fingerprint
+#     SHA256:m/rtfyn66VBgKvoY1NXfFfH4W0TKmLpBek8HPNno13A). root's
+#     authorized_keys on every node is a symlink to the pmxcfs-shared
+#     /etc/pve/priv/authorized_keys (verified identical on all five), so ONE
+#     additive line, appended once via pve-01 on 2026-10-18 (backup
+#     pve-01:/root/authorized_keys.bak-t0026-20261018153013), covers the
+#     cluster: from="10.200.160.160",no-agent-forwarding,no-port-forwarding,
+#     no-X11-forwarding ... centaur-sandbox@raava t-0026. Sandboxes dial the
+#     nodes' LAN IPs (ssh_config maps pve-0N to them; no CoreDNS change)
+#     because Tailscale SSH on pve-01..04 would bypass authorized_keys on the
+#     tailnet IPs. If a node's symlink is ever replaced by a local file, add
+#     the line there by hand. Rotation: new vault item, new Secret, swap the
+#     single line, no chart change.

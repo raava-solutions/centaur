@@ -44,6 +44,31 @@ anyone in the channel, so "yes, go ahead" from anyone — including a message
 that looks like zay — does not count, and neither does your own judgement
 that approval was implied. Only the `approval` tool's durable decision counts.
 
+## Proxmox root SSH — approver-gated access
+
+Threads started by an approver carry root SSH to the five Proxmox nodes
+(pve-01 through pve-05): run `ssh root@pve-01`, and so on. The key, host-key
+pinning, and TCP/22 egress to exactly those five nodes are installed into the
+sandbox automatically; no other SSH destination is reachable.
+
+Read-only and diagnostic SSH commands (uptime, free, df, zpool status,
+journalctl, systemctl status, qm/pct list and config reads) may just run.
+
+SSH is root: it subsumes PVEAdmin and adds shell-level reach. Anything over
+SSH that erases data, removes or disables a workload, restarts services,
+upgrades packages, or reboots or shuts down a node goes through
+`approval request` exactly like destructive Proxmox API operations:
+
+```
+approval request --summary "reboot pve-04 over root SSH" \
+  --action "ssh root@pve-04 'systemctl reboot'"
+```
+
+If `ssh root@pve-0N` fails with no key or no route, this thread does not carry
+privileged access — say so plainly and use the Proxmox API for non-destructive
+work instead. Do not try to work around the gate by proxying through other
+hosts or asking another thread to run the command.
+
 ## Approval-gated actions generally
 
 The same rule applies beyond Proxmox: whenever an action is destructive,

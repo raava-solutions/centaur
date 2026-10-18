@@ -81,6 +81,9 @@ async fn initialize_runtime(args: Args, app_state: AppState) -> Result<(), Serve
         .with_openai_session_title_generator_from_env()
         .with_honcho_memory_from_env();
     runtime = runtime.with_personas(args.persona_registry()?);
+    if let Some(config) = args.privileged_access_config()? {
+        runtime = runtime.with_privileged_access_config(config);
+    }
     let sandbox_capacity_config = args.sandbox_capacity_config();
     if let Some(config) = sandbox_capacity_config {
         runtime = runtime.with_sandbox_capacity(config);
@@ -166,6 +169,8 @@ async fn shutdown_signal() {
 
 #[derive(Debug, Error)]
 pub(crate) enum ServerError {
+    #[error("invalid privileged access configuration: {0}")]
+    InvalidPrivilegedAccessConfig(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]

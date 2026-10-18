@@ -12,8 +12,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use centaur_iron_control::IronControlClient;
 use centaur_sandbox_core::{
-    MountKind, ObservedSandbox, SandboxBackend, SandboxError, SandboxHandle, SandboxId, SandboxIo,
-    SandboxResult, SandboxSpec, SandboxStatus,
+    MountKind, ObservedSandbox, PrivilegedSandboxAccess, SandboxBackend, SandboxError,
+    SandboxHandle, SandboxId, SandboxIo, SandboxResult, SandboxSpec, SandboxStatus,
 };
 use k8s_openapi::api::core::v1::{ConfigMap, PersistentVolumeClaim, Pod};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
@@ -593,6 +593,7 @@ impl SandboxBackend for AgentSandboxBackend {
     async fn stop(&self, id: &SandboxId) -> SandboxResult<()> {
         let proxy_result = self.delete_iron_proxy_resources(id).await;
         let files_result = self.delete_sandbox_files_config_map(id).await;
+        let privileged_result = self.delete_privileged_access_policy(id).await;
         match self
             .sandboxes()
             .delete(id.as_str(), &DeleteParams::default())
@@ -601,11 +602,13 @@ impl SandboxBackend for AgentSandboxBackend {
             Ok(_) => {
                 proxy_result?;
                 files_result?;
+                privileged_result?;
                 self.delete_state_pvc(id).await
             }
             Err(err) if is_not_found(&err) => {
                 proxy_result?;
                 files_result?;
+                privileged_result?;
                 self.delete_state_pvc(id).await
             }
             Err(err) => Err(map_kube_error("delete sandbox", err)),
@@ -639,6 +642,18 @@ impl SandboxBackend for AgentSandboxBackend {
     ) -> SandboxResult<()> {
         self.ensure_proxy_resources_for_principal(id, principal_id, requester_principal_id, labels)
             .await
+    }
+
+    async fn install_privileged_access(
+        &self,
+        id: &SandboxId,
+        access: &PrivilegedSandboxAccess,
+    ) -> SandboxResult<()> {
+        self.install_privileged_access_resources(id, access).await
+    }
+
+    async fn clear_privileged_access(&self, id: &SandboxId) -> SandboxResult<()> {
+        self.clear_privileged_access_resources(id).await
     }
 
     async fn pause(&self, id: &SandboxId) -> SandboxResult<()> {

@@ -192,6 +192,93 @@ describe('Slack home team resolution', () => {
 })
 
 describe('Slack home team API metadata', () => {
+  test('sends the root author in the dedicated original requester field', async () => {
+    const { fetchFn, requests } = fakeApi()
+    const message = apiMessage('hello', {
+      raw: {
+        app_id: 'A_BOT_APP',
+        bot_id: 'B_BOT',
+        team: 'T1',
+        ts: '1700000000.000100',
+        user: 'U1'
+      }
+    })
+
+    await forwardToSessionApi(
+      { ...options(fetchFn), slackHomeTeamId: 'T1' },
+      forwardInput(message)
+    )
+
+    const create = requests.find(request => request.url.endsWith('.000100'))?.body as {
+      metadata?: JsonObject
+      original_requester?: JsonObject
+    }
+    expect(create.original_requester).toEqual(expect.objectContaining({
+      slack_home_team_id: 'T1',
+      slack_thread_author_user_id: 'U1',
+      slack_thread_author_team_id: 'T1',
+      slack_thread_author_bot_id: 'B_BOT',
+      slack_thread_author_app_id: 'A_BOT_APP',
+      slack_thread_is_reply: false
+    }))
+    expect(create.metadata?.slack_thread_author_bot_id).toBe('B_BOT')
+  })
+
+  test('preserves bot and app markers from a resolved thread root', async () => {
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = new URL(String(input))
+      if (url.pathname.endsWith('/conversations.replies')) {
+        return Response.json({
+          ok: true,
+          messages: [{
+            app_id: 'A_ROOT_APP',
+            bot_id: 'B_ROOT',
+            subtype: 'bot_message',
+            team: 'T1',
+            user: 'U_ROOT'
+          }]
+        })
+      }
+      return Response.json({ ok: true, channel: { name: 'test-channel' } })
+    }) as typeof fetch
+    try {
+      const { fetchFn, requests } = fakeApi()
+      const message = apiMessage('reply', {
+        raw: {
+          team: 'T1',
+          thread_ts: '1700000000.000050',
+          ts: '1700000000.000100',
+          user: 'U_REPLY'
+        },
+        threadId: 'slack:C1:1700000000.000050'
+      })
+
+      await forwardToSessionApi(
+        {
+          ...options(fetchFn),
+          slackApiUrl: 'https://slack.test/api/',
+          slackHomeTeamId: 'T1'
+        },
+        forwardInput(message)
+      )
+
+      const create = requests.find(request => request.url.endsWith('.000050'))?.body as {
+        original_requester?: JsonObject
+      }
+      expect(create.original_requester).toEqual(expect.objectContaining({
+        slack_thread_author_user_id: 'U_ROOT',
+        slack_thread_author_team_id: 'T1',
+        slack_thread_author_bot_id: 'B_ROOT',
+        slack_thread_author_app_id: 'A_ROOT_APP',
+        slack_thread_author_subtype: 'bot_message',
+        slack_thread_is_reply: true
+      }))
+    } finally {
+      globalThis.fetch = realFetch
+    }
+  })
+
   test('exposes the home team ID throughout durable session requests', async () => {
     const { fetchFn, requests } = fakeApi()
 

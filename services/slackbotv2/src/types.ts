@@ -74,6 +74,8 @@ export type SlackbotV2AppendMessagesRequest = {
 export type SlackbotV2CreateSessionRequest = {
   harness_type: string
   metadata: JsonObject
+  /** Slack-ingress-attested identity used once for the immutable session gate. */
+  original_requester?: JsonObject
   /** 'restart': switch the thread to harness_type if it's pinned to another harness. */
   on_harness_conflict?: 'reject' | 'restart'
   /** Persona requested when the thread is created; the API pins the first persisted value. */

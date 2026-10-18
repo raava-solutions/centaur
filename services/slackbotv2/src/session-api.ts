@@ -1009,6 +1009,17 @@ async function postCreateSession(
     message && slackConversationKind(slackConversationId(message)) === 'dm'
       ? await resolveRequesterIdentity(options, message)
       : undefined
+  // Keep the thread-author data in ordinary metadata for observability, and
+  // also pass it separately as the ingress-attested source for api-rs's
+  // immutable original_requester snapshot.
+  const threadAuthor = message ? await resolveThreadAuthorMetadata(options, message) : {}
+  const originalRequester = message
+    ? {
+        ...slackHomeTeamMetadata(options),
+        ...sessionRequesterMetadata(message, requesterIdentity),
+        ...threadAuthor
+      }
+    : undefined
   const body: SlackbotV2CreateSessionRequest = {
     harness_type: harnessType,
     metadata: {
@@ -1017,11 +1028,13 @@ async function postCreateSession(
       thread_id: threadId,
       ...slackHomeTeamMetadata(options),
       ...sessionRequesterMetadata(message, requesterIdentity),
+      ...threadAuthor,
       ...(harnessAssignment
         ? { harness_assignment: harnessAssignmentMetadata(harnessAssignment) }
         : {}),
       ...(conversationName ? { slack_conversation_name: conversationName } : {})
     },
+    ...(originalRequester ? { original_requester: originalRequester } : {}),
     ...(personaId ? { persona_id: personaId } : {}),
     ...(onHarnessConflict ? { on_harness_conflict: onHarnessConflict } : {})
   }
@@ -1334,6 +1347,119 @@ function slackConversationKind(
   if (first === 'D') return 'dm'
   if (first === 'C' || first === 'G') return 'channel'
   return undefined
+}
+
+const THREAD_AUTHOR_CACHE_SUCCESS_TTL_MS = 24 * 60 * 60 * 1000
+const THREAD_AUTHOR_CACHE_MISS_TTL_MS = 60 * 1000
+type ThreadAuthor = {
+  userId: string | undefined
+  teamId: string | undefined
+  botId: string | undefined
+  appId: string | undefined
+  subtype: string | undefined
+}
+const threadAuthorCache = new Map<string, ThreadAuthor & { expiresAtMs: number }>()
+
+// The raw `thread_ts` of the thread a reply belongs to, or undefined when the
+// message is itself the thread root. Slack also stamps a root event with
+// `thread_ts` equal to its own `ts`, so both shapes mean "this is the root".
+function slackThreadRootTs(message: SlackbotV2ApiMessage): string | undefined {
+  const threadTs = rawSlackString(message.raw, 'thread_ts')
+  const ts = rawSlackString(message.raw, 'ts')
+  if (!threadTs || threadTs === ts) return undefined
+  return threadTs
+}
+
+/**
+ * Thread-author identity for the session-create metadata: the author of the
+ * thread's root message, which api-rs snapshots immutably as the session's
+ * original requester. A top-level create posts the root itself, so the
+ * creating poster is the author. An in-thread create resolves the root author
+ * through conversations.replies (the root is the first chronological message)
+ * and reports `slack_thread_is_reply: true` so api-rs fails the approver gate
+ * closed when the root author cannot be resolved: the create-turn poster did
+ * not start the thread. Root authors never change, so lookups are cached per
+ * thread root, with brief negative caching so a transient Slack failure cannot
+ * stick.
+ */
+async function resolveThreadAuthorMetadata(
+  options: SlackbotV2Options,
+  message: SlackbotV2ApiMessage
+): Promise<JsonObject> {
+  const userId = messageRequesterUserId(message)
+  const teamId = messageSlackTeamId(message)
+  const rootTs = slackThreadRootTs(message)
+  if (!rootTs) {
+    return threadAuthorFields({
+      userId,
+      teamId,
+      botId: rawSlackString(message.raw, 'bot_id'),
+      appId: rawSlackString(message.raw, 'app_id'),
+      subtype: rawSlackString(message.raw, 'subtype')
+    }, false)
+  }
+  const channelId = slackConversationId(message)
+  const cacheKey = channelId ? `${channelId}:${rootTs}` : undefined
+  const cached = cacheKey ? threadAuthorCache.get(cacheKey) : undefined
+  if (cached && cached.expiresAtMs > Date.now()) {
+    return threadAuthorFields(cached)
+  }
+  let author: ThreadAuthor = {
+    userId: undefined,
+    teamId: undefined,
+    botId: undefined,
+    appId: undefined,
+    subtype: undefined
+  }
+  if (channelId) {
+    try {
+      // `oldest` + `inclusive` pin the batch to the root, which
+      // conversations.replies lists first in ascending order.
+      const payload = await slackApiGet(options, 'conversations.replies', {
+        channel: channelId,
+        ts: rootTs,
+        oldest: rootTs,
+        inclusive: 'true',
+        limit: '1'
+      })
+      const messages = Array.isArray(payload?.messages) ? payload.messages : []
+      const root = messages.length > 0 && isJsonObject(messages[0]) ? messages[0] : undefined
+      const rootUserId = root ? stringValue(root.user) : undefined
+      if (root && rootUserId) {
+        author = {
+          userId: rootUserId,
+          teamId: stringValue(root.team),
+          botId: stringValue(root.bot_id),
+          appId: stringValue(root.app_id),
+          subtype: stringValue(root.subtype)
+        }
+      }
+    } catch (error) {
+      traceLog(options, 'slackbotv2_slack_thread_author_lookup_failed', undefined, {
+        channel_id: channelId,
+        error: errorMessage(error)
+      }, 'warn')
+    }
+  }
+  if (cacheKey) {
+    threadAuthorCache.set(cacheKey, {
+      ...author,
+      expiresAtMs:
+        Date.now() +
+        (author.userId ? THREAD_AUTHOR_CACHE_SUCCESS_TTL_MS : THREAD_AUTHOR_CACHE_MISS_TTL_MS)
+    })
+  }
+  return threadAuthorFields(author)
+}
+
+function threadAuthorFields(author: ThreadAuthor, isReply = true): JsonObject {
+  const fields: JsonObject = { slack_thread_is_reply: isReply }
+  if (author.userId) fields.slack_thread_author_user_id = author.userId
+  if (author.teamId) fields.slack_thread_author_team_id = author.teamId
+  if (author.botId) fields.slack_thread_author_bot_id = author.botId
+  if (author.appId) fields.slack_thread_author_app_id = author.appId
+  if (author.subtype) fields.slack_thread_author_subtype = author.subtype
+  return fields
 }
 
 async function fetchSlackChannelName(

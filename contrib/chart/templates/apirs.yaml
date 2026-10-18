@@ -107,6 +107,15 @@
   (dict "name" "COMPANY_CONTEXT_EMBEDDINGS_MODEL" "value" $companyContextEmbeddingsModel)
   (dict "name" "COMPANY_CONTEXT_EMBEDDINGS_DIMENSIONS" "value" $companyContextEmbeddingsDimensions)
 -}}
+{{- $privilegedAccess := dig "privilegedAccess" (dict) .Values.apiRs -}}
+{{- $privilegedAccessApproverUserIds := dig "approverUserIds" (list) $privilegedAccess -}}
+{{- $privilegedAccessEgressCidrs := dig "egressCidrs" (list) $privilegedAccess -}}
+{{- $privilegedAccessCredentialsSecretName := dig "credentialsSecretName" "" $privilegedAccess -}}
+{{- $privilegedAccessEgressPort := dig "egressPort" 22 $privilegedAccess -}}
+{{- $privilegedAccessEnabled := and
+      (not (empty $privilegedAccessApproverUserIds))
+      (not (empty $privilegedAccessEgressCidrs))
+      (ne $privilegedAccessCredentialsSecretName "") -}}
 {{- $apiRsEtlPassthroughNames := list -}}
 {{- range $env := $apiRsEtlEnv -}}
 {{- $apiRsEtlPassthroughNames = append $apiRsEtlPassthroughNames $env.name -}}
@@ -158,9 +167,12 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  # The sandbox backend REPLACES a sandbox's privileged-access NetworkPolicy
+  # (PUT), so it needs "update" as well as patch; a role with only patch fails
+  # the grant closed with a 403.
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
-    verbs: ["create", "delete", "get", "list", "patch", "watch"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
   - apiGroups: ["agents.x-k8s.io"]
     resources: ["sandboxes"]
     verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
@@ -299,6 +311,16 @@ spec:
 {{- if and .Values.apiRs.workflowHostResources (not (hasKey .Values.apiRs.extraEnv "WORKFLOW_HOST_RESOURCES")) }}
             - name: WORKFLOW_HOST_RESOURCES
               value: {{ toJson .Values.apiRs.workflowHostResources | quote }}
+{{- end }}
+{{- if $privilegedAccessEnabled }}
+            - name: SESSION_PRIVILEGED_ACCESS_APPROVER_USER_IDS
+              value: {{ join "," $privilegedAccessApproverUserIds | quote }}
+            - name: SESSION_PRIVILEGED_ACCESS_CREDENTIALS_DIR
+              value: /app/privileged-access
+            - name: SESSION_PRIVILEGED_ACCESS_EGRESS_CIDRS
+              value: {{ join "," $privilegedAccessEgressCidrs | quote }}
+            - name: SESSION_PRIVILEGED_ACCESS_EGRESS_PORT
+              value: {{ $privilegedAccessEgressPort | quote }}
 {{- end }}
 {{- range $env := $apiRsEtlEnv }}
 {{- if not (hasKey $.Values.apiRs.extraEnv $env.name) }}
@@ -617,14 +639,22 @@ spec:
 {{ toYaml .Values.containerSecurityContext | nindent 12 }}
           resources:
 {{ toYaml .Values.apiRs.resources | nindent 12 }}
-{{- if $useOverlayRepoCache }}
+{{- if or $useOverlayRepoCache $privilegedAccessEnabled }}
           volumeMounts:
+{{- if $useOverlayRepoCache }}
             - name: repo-cache
               mountPath: {{ .Values.repoCache.hostPath | quote }}
               readOnly: true
 {{- end }}
-{{- if $useOverlayRepoCache }}
+{{- if $privilegedAccessEnabled }}
+            - name: privileged-access
+              mountPath: /app/privileged-access
+              readOnly: true
+{{- end }}
+{{- end }}
+{{- if or $useOverlayRepoCache $privilegedAccessEnabled }}
       volumes:
+{{- if $useOverlayRepoCache }}
         - name: repo-cache
 {{- if $repoCacheUsePvc }}
           persistentVolumeClaim:
@@ -634,6 +664,13 @@ spec:
           hostPath:
             path: {{ .Values.repoCache.hostPath | quote }}
             type: DirectoryOrCreate
+{{- end }}
+{{- end }}
+{{- if $privilegedAccessEnabled }}
+        - name: privileged-access
+          secret:
+            secretName: {{ $privilegedAccessCredentialsSecretName | quote }}
+            defaultMode: 0400
 {{- end }}
 {{- end }}
 ---

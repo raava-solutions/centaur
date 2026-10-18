@@ -13,6 +13,13 @@ pub struct CreateSessionRequest {
     /// falls back to the eligible deployment default or no persona.
     pub persona_id: Option<String>,
     pub metadata: Option<Value>,
+    /// Ingress-attested identity of the human that started the thread,
+    /// captured once as the session's immutable `original_requester`
+    /// snapshot. Only a chat ingress sends it; api-rs never derives the
+    /// snapshot from `metadata`, which any session-writer could forge, and
+    /// unknown keys are dropped by the snapshot allowlist.
+    #[serde(default)]
+    pub original_requester: Option<Value>,
     /// What to do when the session already exists on a different harness.
     /// Omitted or `reject`: fail with 409. `restart`: stop the old sandbox and
     /// restart the thread on the requested harness (the new harness starts

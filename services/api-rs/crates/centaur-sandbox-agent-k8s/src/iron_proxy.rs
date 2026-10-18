@@ -28,6 +28,8 @@ use crate::{
     OtlpEgressTarget, SANDBOX_ID_LABEL, is_not_found, map_kube_error,
 };
 
+mod privileged;
+
 const IRON_PROXY_LABEL: &str = "centaur.ai/iron-proxy";
 const IRON_CONTROL_PROXY_ID_ANNOTATION: &str = "centaur.ai/iron-control-proxy-id";
 const FIREWALL_CA_MOUNT_PATH: &str = "/firewall-certs";

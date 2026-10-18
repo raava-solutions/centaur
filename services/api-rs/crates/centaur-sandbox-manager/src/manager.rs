@@ -1,8 +1,8 @@
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use centaur_sandbox_core::{
-    DesiredSandboxState, ObservedSandbox, SandboxBackend, SandboxHandle, SandboxId, SandboxIo,
-    SandboxResult, SandboxSpec, SandboxStatus,
+    DesiredSandboxState, ObservedSandbox, PrivilegedSandboxAccess, SandboxBackend, SandboxHandle,
+    SandboxId, SandboxIo, SandboxResult, SandboxSpec, SandboxStatus,
 };
 use centaur_telemetry::{record_sandbox_operation, record_sandbox_startup_duration};
 use tokio::time::Instant;
@@ -268,6 +268,24 @@ where
         self.backend
             .ensure_iron_control_proxy_resources(id, principal_id, requester_principal_id, labels)
             .await
+    }
+
+    /// Install privileged credentials (files + matching egress) into a
+    /// running sandbox. Failures must be treated as fail-closed by callers:
+    /// a gated session whose credentials cannot be installed must not run.
+    pub async fn install_privileged_access(
+        &self,
+        id: &SandboxId,
+        access: &PrivilegedSandboxAccess,
+    ) -> SandboxResult<()> {
+        self.backend.install_privileged_access(id, access).await
+    }
+
+    /// Remove privileged credentials and their egress allowance. Idempotent
+    /// for sandboxes that never had a grant; live-sandbox failures propagate
+    /// so the session runtime can fail closed.
+    pub async fn clear_privileged_access(&self, id: &SandboxId) -> SandboxResult<()> {
+        self.backend.clear_privileged_access(id).await
     }
 
     pub async fn reconcile_one(&self, id: &SandboxId) -> SandboxResult<ReconcileOutcome> {
