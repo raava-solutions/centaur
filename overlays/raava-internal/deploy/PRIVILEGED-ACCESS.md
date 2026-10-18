@@ -110,7 +110,13 @@ the `from=` pin.
    pve-02 `.153`, pve-03 `.166`, pve-04 `.214`, pve-05 `.212`; shared
    block: `User root`, `IdentityFile ~/.ssh/centaur-privileged/id_ed25519`,
    `IdentitiesOnly yes`, `UserKnownHostsFile ~/.ssh/centaur-privileged/known_hosts`,
-   `StrictHostKeyChecking yes`, `HostKeyAlias %n`, `ConnectTimeout 10`.
+   `StrictHostKeyChecking yes`, `ConnectTimeout 10`. Do NOT add
+   `HostKeyAlias %n` or any %-token: OpenSSH performs no token expansion in
+   HostKeyAlias, so the literal "%n" never matches a known_hosts entry and
+   every connection fails host-key verification (removed from the live
+   Secret 2026-10-18 after step 1 caught it). The known_hosts lines are
+   already keyed per node as `pve-0N,<LAN IP>`, which matches the
+   `Host pve-0N` alias.
 4. **Kubernetes Secret** `centaur-privileged-access` (namespace `centaur`)
    with keys `id_ed25519`, `known_hosts`, `ssh_config`:
    `kubectl -n centaur create secret generic centaur-privileged-access
@@ -124,16 +130,22 @@ the `from=` pin.
    ssh-ed25519 AAAA… centaur-sandbox@raava t-0026`. E2E step 1 confirms the
    source the nodes actually log; if it differs, change the pin before the
    work counts as done.
-6. **Rollout**: build + side-load `centaur-api-rs`, `centaur-slackbotv2`,
+6. **RBAC**: the api-rs Role must allow `update` (not just `patch`) on
+   `networkpolicies`: the privileged backend REPLACES the per-sandbox
+   egress policy (PUT). A role with only `patch` fails every gated bind
+   closed with a 403 (verified live on 2026-10-18: the turn failed with
+   `sandbox_privileged_access_install_failed` and no policy was created).
+7. **Rollout**: build + side-load `centaur-api-rs`, `centaur-slackbotv2`,
    `centaur-agent` (image now ships openssh-client) from this branch;
    `helm upgrade` with the overlay; api-rs restarts and picks up the env.
 
 ## E2E protocol (live cluster; run after setup, record every command + result)
 
 - **Step 0** — Config review: `helm template ... --show-only templates/apirs.yaml`
-  shows the four `SESSION_PRIVILEGED_ACCESS_*` env vars and the Secret volume;
-  api-rs logs `privileged_access` configuration once at startup (no secret
-  material).
+  shows the four `SESSION_PRIVILEGED_ACCESS_*` env vars and the Secret volume.
+  (api-rs logs nothing about the config at startup; the rendered manifest and
+  the first gated bind's `sandbox_privileged_access_installed` event are the
+  evidence.)
 - **Step 1 — Approver grant**: zay starts a NEW top-level thread and asks for
   `ssh root@pve-0N uptime` on all five nodes. All five succeed. Verify: api-rs
   logged `sandbox_privileged_access_installed`; the session pod has a
@@ -164,9 +176,14 @@ the `from=` pin.
   unresolvable author, which also denies). Repeat with a bot/app-authored root
   whose message carries a Slack user ID: its `bot_id`, `app_id`, or non-plain
   `subtype` marker must still deny the grant.
-- **Step 7 — Install failure fails closed**: temporarily point
-  `credentialsSecretName` at a missing Secret and redeploy; zay's next turn
-  FAILS with the privileged-access install error (fail closed). Restore.
+- **Step 7 — Install failure fails closed**: remove `update` (or any
+  networkpolicies verb) from the api-rs Role — `kubectl -n centaur patch role
+  centaur-centaur-api-rs-sandbox-manager --type=merge -p <rules without
+  update>`, which needs no restart; zay's next turn FAILS with
+  `sandbox_privileged_access_install_failed` and no policy is created.
+  Restore the verb afterwards. Do NOT instead point
+  `credentialsSecretName` at a missing Secret: the chart still mounts it, so
+  the api-rs pod cannot start at all (deployment outage, not fail-closed).
 - **Step 8 — Revocation**: set `approverUserIds: []` and redeploy; a new turn
   in zay's existing thread has no key and its netpol is cleared. Restore
   zay's ID and confirm a fresh thread regains access.

@@ -167,9 +167,12 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  # The sandbox backend REPLACES a sandbox's privileged-access NetworkPolicy
+  # (PUT), so it needs "update" as well as patch; a role with only patch fails
+  # the grant closed with a 403.
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
-    verbs: ["create", "delete", "get", "list", "patch", "watch"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
   - apiGroups: ["agents.x-k8s.io"]
     resources: ["sandboxes"]
     verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
