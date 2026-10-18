@@ -90,6 +90,11 @@ pub struct PgSessionStore {
     pool: PgPool,
 }
 
+struct CreateSessionOptions {
+    merge_metadata: bool,
+    original_requester: Option<Value>,
+}
+
 impl PgSessionStore {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
@@ -126,13 +131,42 @@ impl PgSessionStore {
         metadata: Value,
         proxy_labels: BTreeMap<String, String>,
     ) -> Result<Session, SessionStoreError> {
+        self.create_or_get_session_with_requester(
+            thread_key,
+            harness_type,
+            persona_id,
+            metadata,
+            proxy_labels,
+            None,
+        )
+        .await
+    }
+
+    /// Create or load a session, persisting the ingress-attested
+    /// [`Session::original_requester`] snapshot supplied by the caller. The
+    /// snapshot is built ONLY from this explicit field — never from
+    /// `metadata`, which any session-writer (workflow agent turns included)
+    /// could otherwise forge with approver identity keys — and only the first
+    /// INSERT ever persists it.
+    pub async fn create_or_get_session_with_requester(
+        &self,
+        thread_key: &ThreadKey,
+        harness_type: &HarnessType,
+        persona_id: Option<&str>,
+        metadata: Value,
+        proxy_labels: BTreeMap<String, String>,
+        original_requester: Option<Value>,
+    ) -> Result<Session, SessionStoreError> {
         self.create_or_get_session_inner(
             thread_key,
             harness_type,
             persona_id,
             metadata,
             proxy_labels,
-            false,
+            CreateSessionOptions {
+                merge_metadata: false,
+                original_requester,
+            },
         )
         .await
     }
@@ -141,10 +175,11 @@ impl PgSessionStore {
     /// existing row. The conflict update is skipped when every supplied value
     /// is already present, so unchanged calls do not write or touch updated_at.
     ///
-    /// The original requester snapshot is derived from the create metadata and
-    /// persisted only when the INSERT creates the row: conflict updates never
-    /// rewrite it, so the first requester identity stays immutable for the
-    /// session's lifetime even though `metadata` keeps merging.
+    /// This internal metadata-merging path persists no requester snapshot;
+    /// only the authenticated ingress create path may provide one. Conflict
+    /// updates never rewrite a snapshot, so the first requester identity stays
+    /// immutable for the session's lifetime even though `metadata` keeps
+    /// merging.
     pub async fn create_or_get_session_merging_metadata(
         &self,
         thread_key: &ThreadKey,
@@ -159,7 +194,10 @@ impl PgSessionStore {
             persona_id,
             metadata,
             proxy_labels,
-            true,
+            CreateSessionOptions {
+                merge_metadata: true,
+                original_requester: None,
+            },
         )
         .await
     }
@@ -171,13 +209,18 @@ impl PgSessionStore {
         persona_id: Option<&str>,
         metadata: Value,
         proxy_labels: BTreeMap<String, String>,
-        merge_metadata: bool,
+        options: CreateSessionOptions,
     ) -> Result<Session, SessionStoreError> {
-        // Insert-only: computed on every call but only the first INSERT writes
-        // it, so a later create-or-reuse with different requester metadata can
-        // never rewrite the identity security gates rely on.
-        let original_requester = centaur_session_core::original_requester_snapshot(&metadata);
-        let query = if merge_metadata {
+        // Insert-only, and only from the ingress-supplied `original_requester`
+        // field: caller metadata never feeds the snapshot, because any
+        // session-writer (workflow agent turns included) could forge approver
+        // identity keys there. Only the first INSERT writes it, so a later
+        // create-or-reuse can never rewrite the identity security gates rely on.
+        let original_requester = options
+            .original_requester
+            .as_ref()
+            .and_then(centaur_session_core::original_requester_snapshot);
+        let query = if options.merge_metadata {
             sqlx::query(
                 r#"
                 insert into sessions (thread_key, harness_type, persona_id, status, metadata, proxy_labels, original_requester)
@@ -1422,7 +1465,7 @@ impl PgSessionStore {
                 end,
                 updated_at = now()
             where thread_key = $1
-            returning thread_key, title, sandbox_id, sandbox_repo_cache_enabled, sandbox_repo_cache_access, sandbox_observability_enabled, harness_type, harness_thread_id, persona_id, status, iron_control_principal, proxy_labels, sandbox_last_active_at, created_at, updated_at
+            returning thread_key, title, sandbox_id, sandbox_repo_cache_enabled, sandbox_repo_cache_access, sandbox_observability_enabled, harness_type, harness_thread_id, persona_id, status, iron_control_principal, proxy_labels, original_requester, sandbox_last_active_at, created_at, updated_at
             "#,
         )
         .bind(thread_key.as_str())
@@ -1453,7 +1496,7 @@ impl PgSessionStore {
                 sandbox_last_active_at = now(),
                 updated_at = now()
             where thread_key = $1
-            returning thread_key, title, sandbox_id, sandbox_repo_cache_enabled, sandbox_repo_cache_access, sandbox_observability_enabled, harness_type, harness_thread_id, persona_id, status, iron_control_principal, proxy_labels, sandbox_last_active_at, created_at, updated_at
+            returning thread_key, title, sandbox_id, sandbox_repo_cache_enabled, sandbox_repo_cache_access, sandbox_observability_enabled, harness_type, harness_thread_id, persona_id, status, iron_control_principal, proxy_labels, original_requester, sandbox_last_active_at, created_at, updated_at
             "#,
         )
         .bind(thread_key.as_str())
@@ -1515,7 +1558,7 @@ impl PgSessionStore {
                 status = $3,
                 updated_at = now()
             where thread_key = $1
-            returning thread_key, title, sandbox_id, sandbox_repo_cache_enabled, sandbox_repo_cache_access, sandbox_observability_enabled, harness_type, harness_thread_id, persona_id, status, iron_control_principal, proxy_labels, sandbox_last_active_at, created_at, updated_at
+            returning thread_key, title, sandbox_id, sandbox_repo_cache_enabled, sandbox_repo_cache_access, sandbox_observability_enabled, harness_type, harness_thread_id, persona_id, status, iron_control_principal, proxy_labels, original_requester, sandbox_last_active_at, created_at, updated_at
             "#,
         )
         .bind(thread_key.as_str())
@@ -1540,7 +1583,7 @@ impl PgSessionStore {
             update sessions
             set iron_control_principal = $2, updated_at = now()
             where thread_key = $1
-            returning thread_key, title, sandbox_id, sandbox_repo_cache_enabled, sandbox_repo_cache_access, sandbox_observability_enabled, harness_type, harness_thread_id, persona_id, status, iron_control_principal, proxy_labels, sandbox_last_active_at, created_at, updated_at
+            returning thread_key, title, sandbox_id, sandbox_repo_cache_enabled, sandbox_repo_cache_access, sandbox_observability_enabled, harness_type, harness_thread_id, persona_id, status, iron_control_principal, proxy_labels, original_requester, sandbox_last_active_at, created_at, updated_at
             "#,
         )
         .bind(thread_key.as_str())
@@ -1566,7 +1609,7 @@ impl PgSessionStore {
             set iron_control_principal = $2, updated_at = now()
             where thread_key = $1
               and (iron_control_principal is null or iron_control_principal = $2)
-            returning thread_key, title, sandbox_id, sandbox_repo_cache_enabled, sandbox_repo_cache_access, sandbox_observability_enabled, harness_type, harness_thread_id, persona_id, status, iron_control_principal, proxy_labels, sandbox_last_active_at, created_at, updated_at
+            returning thread_key, title, sandbox_id, sandbox_repo_cache_enabled, sandbox_repo_cache_access, sandbox_observability_enabled, harness_type, harness_thread_id, persona_id, status, iron_control_principal, proxy_labels, original_requester, sandbox_last_active_at, created_at, updated_at
             "#,
         )
         .bind(thread_key.as_str())
@@ -1751,7 +1794,7 @@ impl PgSessionStore {
             update sessions
             set harness_thread_id = $2, updated_at = now()
             where thread_key = $1
-            returning thread_key, title, sandbox_id, sandbox_repo_cache_enabled, sandbox_repo_cache_access, sandbox_observability_enabled, harness_type, harness_thread_id, persona_id, status, iron_control_principal, proxy_labels, sandbox_last_active_at, created_at, updated_at
+            returning thread_key, title, sandbox_id, sandbox_repo_cache_enabled, sandbox_repo_cache_access, sandbox_observability_enabled, harness_type, harness_thread_id, persona_id, status, iron_control_principal, proxy_labels, original_requester, sandbox_last_active_at, created_at, updated_at
             "#,
         )
         .bind(thread_key.as_str())
@@ -2408,17 +2451,20 @@ mod tests {
             ThreadKey::parse(format!("test:original-requester-{}", Uuid::new_v4())).unwrap();
 
         let created = store
-            .create_or_get_session(
+            .create_or_get_session_with_requester(
                 &thread_key,
                 &HarnessType::Codex,
                 None,
                 json!({
                     "source": "slackbotv2",
+                    "slack_user_id": "U_OTHER",
+                }),
+                Default::default(),
+                Some(json!({
                     "slack_user_id": "U_APPROVER",
                     "slack_team_id": "T123",
                     "slack_home_team_id": "T123",
-                }),
-                Default::default(),
+                })),
             )
             .await
             .expect("create session");
@@ -2430,7 +2476,7 @@ mod tests {
         assert_eq!(
             created.original_requester,
             Some(expected_snapshot.clone()),
-            "the first create's identity is snapshotted immutably"
+            "the ingress-supplied requester is snapshotted immutably"
         );
 
         // A later create-or-reuse by a different poster must not rewrite the
@@ -2465,6 +2511,37 @@ mod tests {
             updated.original_requester,
             Some(expected_snapshot),
             "original requester stays the first create's identity"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn original_requester_is_never_derived_from_caller_metadata() {
+        // Regression for the forging vector: a session-writer (a workflow
+        // agent turn, or any SessionsWrite caller) stuffing approver identity
+        // keys into metadata must NOT mint an original requester snapshot.
+        let Some(store) = test_store().await else {
+            return;
+        };
+        let thread_key =
+            ThreadKey::parse(format!("test:original-requester-forged-{}", Uuid::new_v4())).unwrap();
+        let created = store
+            .create_or_get_session(
+                &thread_key,
+                &HarnessType::Codex,
+                None,
+                json!({
+                    "slack_thread_author_user_id": "U_APPROVER",
+                    "slack_thread_author_team_id": "T123",
+                    "slack_home_team_id": "T123",
+                    "slack_thread_is_reply": false,
+                }),
+                Default::default(),
+            )
+            .await
+            .expect("create session");
+        assert_eq!(
+            created.original_requester, None,
+            "metadata alone never produces a requester snapshot"
         );
     }
 

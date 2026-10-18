@@ -1009,9 +1009,17 @@ async function postCreateSession(
     message && slackConversationKind(slackConversationId(message)) === 'dm'
       ? await resolveRequesterIdentity(options, message)
       : undefined
-  // Thread-author identity rides the create metadata, where api-rs snapshots
-  // it immutably as the session's original requester.
+  // Keep the thread-author data in ordinary metadata for observability, and
+  // also pass it separately as the ingress-attested source for api-rs's
+  // immutable original_requester snapshot.
   const threadAuthor = message ? await resolveThreadAuthorMetadata(options, message) : {}
+  const originalRequester = message
+    ? {
+        ...slackHomeTeamMetadata(options),
+        ...sessionRequesterMetadata(message, requesterIdentity),
+        ...threadAuthor
+      }
+    : undefined
   const body: SlackbotV2CreateSessionRequest = {
     harness_type: harnessType,
     metadata: {
@@ -1026,6 +1034,7 @@ async function postCreateSession(
         : {}),
       ...(conversationName ? { slack_conversation_name: conversationName } : {})
     },
+    ...(originalRequester ? { original_requester: originalRequester } : {}),
     ...(personaId ? { persona_id: personaId } : {}),
     ...(onHarnessConflict ? { on_harness_conflict: onHarnessConflict } : {})
   }
@@ -1342,10 +1351,14 @@ function slackConversationKind(
 
 const THREAD_AUTHOR_CACHE_SUCCESS_TTL_MS = 24 * 60 * 60 * 1000
 const THREAD_AUTHOR_CACHE_MISS_TTL_MS = 60 * 1000
-const threadAuthorCache = new Map<
-  string,
-  { userId: string | undefined; teamId: string | undefined; expiresAtMs: number }
->()
+type ThreadAuthor = {
+  userId: string | undefined
+  teamId: string | undefined
+  botId: string | undefined
+  appId: string | undefined
+  subtype: string | undefined
+}
+const threadAuthorCache = new Map<string, ThreadAuthor & { expiresAtMs: number }>()
 
 // The raw `thread_ts` of the thread a reply belongs to, or undefined when the
 // message is itself the thread root. Slack also stamps a root event with
@@ -1377,20 +1390,26 @@ async function resolveThreadAuthorMetadata(
   const teamId = messageSlackTeamId(message)
   const rootTs = slackThreadRootTs(message)
   if (!rootTs) {
-    const fields: JsonObject = { slack_thread_is_reply: false }
-    if (userId) fields.slack_thread_author_user_id = userId
-    if (teamId) fields.slack_thread_author_team_id = teamId
-    return fields
+    return threadAuthorFields({
+      userId,
+      teamId,
+      botId: rawSlackString(message.raw, 'bot_id'),
+      appId: rawSlackString(message.raw, 'app_id'),
+      subtype: rawSlackString(message.raw, 'subtype')
+    }, false)
   }
   const channelId = slackConversationId(message)
   const cacheKey = channelId ? `${channelId}:${rootTs}` : undefined
   const cached = cacheKey ? threadAuthorCache.get(cacheKey) : undefined
   if (cached && cached.expiresAtMs > Date.now()) {
-    return threadAuthorFields(cached.userId, cached.teamId)
+    return threadAuthorFields(cached)
   }
-  let author: { userId: string | undefined; teamId: string | undefined } = {
+  let author: ThreadAuthor = {
     userId: undefined,
-    teamId: undefined
+    teamId: undefined,
+    botId: undefined,
+    appId: undefined,
+    subtype: undefined
   }
   if (channelId) {
     try {
@@ -1407,7 +1426,13 @@ async function resolveThreadAuthorMetadata(
       const root = messages.length > 0 && isJsonObject(messages[0]) ? messages[0] : undefined
       const rootUserId = root ? stringValue(root.user) : undefined
       if (root && rootUserId) {
-        author = { userId: rootUserId, teamId: stringValue(root.team) ?? undefined }
+        author = {
+          userId: rootUserId,
+          teamId: stringValue(root.team),
+          botId: stringValue(root.bot_id),
+          appId: stringValue(root.app_id),
+          subtype: stringValue(root.subtype)
+        }
       }
     } catch (error) {
       traceLog(options, 'slackbotv2_slack_thread_author_lookup_failed', undefined, {
@@ -1424,13 +1449,16 @@ async function resolveThreadAuthorMetadata(
         (author.userId ? THREAD_AUTHOR_CACHE_SUCCESS_TTL_MS : THREAD_AUTHOR_CACHE_MISS_TTL_MS)
     })
   }
-  return threadAuthorFields(author.userId, author.teamId)
+  return threadAuthorFields(author)
 }
 
-function threadAuthorFields(userId: string | undefined, teamId: string | undefined): JsonObject {
-  const fields: JsonObject = { slack_thread_is_reply: true }
-  if (userId) fields.slack_thread_author_user_id = userId
-  if (teamId) fields.slack_thread_author_team_id = teamId
+function threadAuthorFields(author: ThreadAuthor, isReply = true): JsonObject {
+  const fields: JsonObject = { slack_thread_is_reply: isReply }
+  if (author.userId) fields.slack_thread_author_user_id = author.userId
+  if (author.teamId) fields.slack_thread_author_team_id = author.teamId
+  if (author.botId) fields.slack_thread_author_bot_id = author.botId
+  if (author.appId) fields.slack_thread_author_app_id = author.appId
+  if (author.subtype) fields.slack_thread_author_subtype = author.subtype
   return fields
 }
 

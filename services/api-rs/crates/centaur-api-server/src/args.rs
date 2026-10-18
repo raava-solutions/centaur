@@ -95,8 +95,12 @@ impl Args {
     }
 
     /// Approver-gated privileged sandbox access, or `None` when the feature
-    /// is unconfigured (or partially configured, which fails off).
-    pub(crate) fn privileged_access_config(&self) -> Option<PrivilegedSandboxAccessConfig> {
+    /// is unconfigured (or partially configured, which fails off). An invalid
+    /// egress CIDR fails startup instead of silently widening or disabling
+    /// the grant.
+    pub(crate) fn privileged_access_config(
+        &self,
+    ) -> Result<Option<PrivilegedSandboxAccessConfig>, ServerError> {
         self.sandbox.privileged_access_config()
     }
 
@@ -1474,7 +1478,9 @@ impl SandboxArgs {
         self.tools.resolve_tool_dirs()
     }
 
-    fn privileged_access_config(&self) -> Option<PrivilegedSandboxAccessConfig> {
+    fn privileged_access_config(
+        &self,
+    ) -> Result<Option<PrivilegedSandboxAccessConfig>, ServerError> {
         self.privileged_access.config()
     }
 
@@ -1938,8 +1944,11 @@ struct PrivilegedAccessArgs {
 impl PrivilegedAccessArgs {
     /// Build the runtime config only when every required piece is present.
     /// Values are trimmed and blank entries dropped, so a stray comma can
-    /// never silently change the grant set.
-    fn config(&self) -> Option<PrivilegedSandboxAccessConfig> {
+    /// never silently change the grant set. A configured egress CIDR that is
+    /// not a single-host IPv4 route (a.b.c.d/32) fails startup: a broader
+    /// value would silently widen the grant, and ignoring it would silently
+    /// disable the feature.
+    fn config(&self) -> Result<Option<PrivilegedSandboxAccessConfig>, ServerError> {
         let approver_user_ids: Vec<String> = self
             .approver_user_ids
             .iter()
@@ -1952,19 +1961,27 @@ impl PrivilegedAccessArgs {
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty())
             .collect();
+        for cidr in &egress_cidrs {
+            if !is_single_host_ipv4_cidr(cidr) {
+                return Err(ServerError::InvalidPrivilegedAccessConfig(format!(
+                    "SESSION_PRIVILEGED_ACCESS_EGRESS_CIDRS entries must be single-host IPv4 \
+                     CIDRs (a.b.c.d/32), got {cidr:?}"
+                )));
+            }
+        }
         match (
             self.credentials_dir.clone(),
             approver_user_ids.is_empty(),
             egress_cidrs.is_empty(),
         ) {
-            (Some(credentials_dir), false, false) => Some(PrivilegedSandboxAccessConfig {
+            (Some(credentials_dir), false, false) => Ok(Some(PrivilegedSandboxAccessConfig {
                 approver_user_ids,
                 credentials_dir,
                 egress_cidrs,
                 egress_port: self.egress_port,
-            }),
+            })),
             // Entirely unconfigured: the feature is simply off.
-            (None, true, true) => None,
+            (None, true, true) => Ok(None),
             _ => {
                 warn!(
                     event = "privileged_access_config_incomplete",
@@ -1975,10 +1992,17 @@ impl PrivilegedAccessArgs {
                      disabled until approvers, destinations, and the credentials directory \
                      are all set"
                 );
-                None
+                Ok(None)
             }
         }
     }
+}
+
+/// A single IPv4 host route: an address plus the exact /32 mask. The
+/// privileged grant must never be broader than one destination host.
+fn is_single_host_ipv4_cidr(cidr: &str) -> bool {
+    cidr.strip_suffix("/32")
+        .is_some_and(|ip| ip.parse::<std::net::Ipv4Addr>().is_ok())
 }
 
 impl IronProxyArgs {

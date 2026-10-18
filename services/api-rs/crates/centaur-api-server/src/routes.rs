@@ -659,10 +659,18 @@ fn session_thread_key_from_path(path: &str) -> Option<ThreadKey> {
 
 async fn create_or_get_session(
     State(state): State<AppState>,
+    Extension(caller): Extension<AuthenticatedCaller>,
     Path(raw_thread_key): Path<String>,
     Json(request): Json<CreateSessionRequest>,
 ) -> Result<Json<CreateSessionResponse>, ApiError> {
     let thread_key = ThreadKey::try_from(raw_thread_key)?;
+    if request.original_requester.is_some()
+        && !may_assert_original_requester(caller.class(), caller.identity(), &thread_key)
+    {
+        return Err(ApiError::Forbidden(
+            "only the Slack ingress may assert an original requester".to_owned(),
+        ));
+    }
     let harness_type = request.harness_type;
     let runtime = state.runtime()?;
     let on_harness_conflict = match request.on_harness_conflict {
@@ -670,11 +678,12 @@ async fn create_or_get_session(
         Some(OnHarnessConflict::Reject) | None => HarnessConflictPolicy::Reject,
     };
     let outcome = runtime
-        .create_or_get_session(
+        .create_or_get_session_with_requester(
             &thread_key,
             &harness_type,
             request.persona_id.as_deref(),
             request.metadata,
+            request.original_requester,
             on_harness_conflict,
         )
         .await?;
@@ -683,6 +692,16 @@ async fn create_or_get_session(
         harness_switched: outcome.harness_switched,
         unavailable_requested_persona_id: outcome.unavailable_requested_persona_id,
     }))
+}
+
+fn may_assert_original_requester(
+    caller_class: CallerClass,
+    caller_identity: &str,
+    thread_key: &ThreadKey,
+) -> bool {
+    caller_class == CallerClass::Ingress
+        && caller_identity == "slackbot"
+        && thread_key.as_str().starts_with("slack:")
 }
 
 async fn get_session_context(
@@ -944,9 +963,10 @@ fn principal_subject_owns_session(subject: Option<&str>, session_principal: Opti
 #[cfg(test)]
 mod session_authorization_tests {
     use super::{
-        CallerClass, principal_subject_owns_session, sanitize_execute_metadata,
-        thread_key_matches_platform,
+        CallerClass, may_assert_original_requester, principal_subject_owns_session,
+        sanitize_execute_metadata, thread_key_matches_platform,
     };
+    use centaur_session_core::ThreadKey;
     use serde_json::json;
 
     #[test]
@@ -1013,6 +1033,33 @@ mod session_authorization_tests {
                 Some(json!({ "source": "console" }))
             );
         }
+    }
+
+    #[test]
+    fn only_slack_ingress_may_assert_original_requester_for_slack_threads() {
+        let slack_thread = ThreadKey::parse("slack:C123:123.456").unwrap();
+        let github_thread = ThreadKey::parse("github:owner/repo:123").unwrap();
+
+        assert!(may_assert_original_requester(
+            CallerClass::Ingress,
+            "slackbot",
+            &slack_thread
+        ));
+        assert!(!may_assert_original_requester(
+            CallerClass::Ingress,
+            "discordbot",
+            &slack_thread
+        ));
+        assert!(!may_assert_original_requester(
+            CallerClass::Admin,
+            "api-rs-admin",
+            &slack_thread
+        ));
+        assert!(!may_assert_original_requester(
+            CallerClass::Ingress,
+            "slackbot",
+            &github_thread
+        ));
     }
 }
 

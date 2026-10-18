@@ -281,9 +281,9 @@ where
         self.backend.install_privileged_access(id, access).await
     }
 
-    /// Best-effort removal of privileged credentials and their egress
-    /// allowance. Idempotent and safe to call for sandboxes that never had
-    /// them.
+    /// Remove privileged credentials and their egress allowance. Idempotent
+    /// for sandboxes that never had a grant; live-sandbox failures propagate
+    /// so the session runtime can fail closed.
     pub async fn clear_privileged_access(&self, id: &SandboxId) -> SandboxResult<()> {
         self.backend.clear_privileged_access(id).await
     }

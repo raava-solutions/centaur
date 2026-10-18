@@ -130,25 +130,28 @@ apiRs:
   # Approver-gated privileged sandbox access: sessions whose immutable original
   # requester (thread-root author) is zay (U08TZCX8Q2E) get root SSH credentials
   # to the Proxmox nodes installed into their sandbox on every bind, plus
-  # TCP/22 egress to the five nodes' tailnet addresses. The credentials Secret
+  # TCP/22 egress to the five nodes' LAN addresses. The credentials Secret
   # (keys id_ed25519 / known_hosts / ssh_config) is created out of band and is
   # never committed. Partial configuration elsewhere in this file stays inert:
-  # the chart only enables the feature when approvers, destinations, and the
-  # Secret name are all present.
+  # the chart only mounts the Secret and passes grant settings when approvers,
+  # destinations, and the Secret name are all present. Removing the list still
+  # causes api-rs to clear any existing grant on the next sandbox bind.
   privilegedAccess:
     approverUserIds:
       - U08TZCX8Q2E
     credentialsSecretName: centaur-privileged-access
-    # The five Proxmox nodes' Tailscale addresses (canonical fleet inventory).
-    # Cluster pods already route to tailnet IPs — iron-proxy dials 100.x hosts
-    # today. The node-observed SOURCE IP (for the authorized_keys `from=` pin
-    # on each node) is established by the E2E pass and recorded out of band.
+    # The five Proxmox nodes' cluster-LAN (corosync) addresses, NOT their
+    # tailnet addresses: Tailscale SSH is enabled on pve-01..pve-04, so
+    # tailscaled answers :22 on the tailnet IP and authorizes by tailnet ACL,
+    # bypassing authorized_keys and its from= pin. On the LAN, plain sshd
+    # answers and the key line pins from="10.200.160.160" (centaur-k3s, which
+    # SNATs sandbox pod egress to its LAN address).
     egressCidrs:
-      - 100.104.80.71/32 # pve-01
-      - 100.64.219.49/32 # pve-02
-      - 100.96.27.92/32 # pve-03
-      - 100.102.220.0/32 # pve-04
-      - 100.112.202.84/32 # pve-05
+      - 10.200.160.152/32 # pve-01
+      - 10.200.160.153/32 # pve-02
+      - 10.200.160.166/32 # pve-03
+      - 10.200.160.214/32 # pve-04
+      - 10.200.160.212/32 # pve-05
     egressPort: 22
   extraEnv:
     CENTAUR_DEFAULT_PERSONA: chief
@@ -436,12 +439,16 @@ agentSandbox:
 #     k8s Secret `centaur-privileged-access` (keys id_ed25519, known_hosts,
 #     ssh_config) is created out of band and NEVER committed; the ed25519
 #     keypair lives in the 1Password Engineering vault as
-#     CENTAUR_PROXMOX_ROOT_SSH. Each of the five nodes carries ONE additive
-#     authorized_keys line for the public key — /etc/pve/priv/authorized_keys
-#     is NODE-LOCAL, so all five nodes were touched individually — with a
-#     from= pin to the node-observed k3s egress source IP (captured during
-#     the E2E pass; see deploy/PRIVILEGED-ACCESS.md). The nodes' tailnet
-#     addresses in egressCidrs need no CoreDNS change (ssh_config maps
-#     pve-0N to the raw IPs). If the key is ever rotated: new Secret, new
-#     vault item, five new authorized_keys lines (remove the old ones), no
-#     chart change.
+#     CENTAUR_PROXMOX_ROOT_SSH (SSH Key item, fingerprint
+#     SHA256:m/rtfyn66VBgKvoY1NXfFfH4W0TKmLpBek8HPNno13A). root's
+#     authorized_keys on every node is a symlink to the pmxcfs-shared
+#     /etc/pve/priv/authorized_keys (verified identical on all five), so ONE
+#     additive line, appended once via pve-01 on 2026-10-18 (backup
+#     pve-01:/root/authorized_keys.bak-t0026-20261018153013), covers the
+#     cluster: from="10.200.160.160",no-agent-forwarding,no-port-forwarding,
+#     no-X11-forwarding ... centaur-sandbox@raava t-0026. Sandboxes dial the
+#     nodes' LAN IPs (ssh_config maps pve-0N to them; no CoreDNS change)
+#     because Tailscale SSH on pve-01..04 would bypass authorized_keys on the
+#     tailnet IPs. If a node's symlink is ever replaced by a local file, add
+#     the line there by hand. Rotation: new vault item, new Secret, swap the
+#     single line, no chart change.

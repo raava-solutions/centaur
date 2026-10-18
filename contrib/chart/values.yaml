@@ -478,8 +478,9 @@ apiRs:
   # from the named Secret (keys: id_ed25519, known_hosts, ssh_config) and TCP
   # egress to the listed CIDRs on egressPort installed into their sandbox on
   # every bind. Every other session's sandbox is cleared of both. Partial
-  # configuration disables the feature; api-rs logs a warning when it sees
-  # one. The Secret is created out of band and never committed.
+  # configuration disables grants; api-rs logs a warning when it sees one.
+  # Disabling/emptying this block still lets api-rs revoke existing grants on
+  # the next sandbox bind; the Secret is created out of band and never committed.
   privilegedAccess:
     approverUserIds: []
     credentialsSecretName: ""

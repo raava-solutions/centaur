@@ -162,7 +162,8 @@ pub struct SessionRuntime {
     /// exit and release its leases.
     shutting_down: Arc<AtomicBool>,
     /// Approver-gated privileged sandbox access configuration. `None` leaves
-    /// every sandbox without privileged credentials (the feature is off).
+    /// the feature off: no sandbox is granted credentials, and every bind
+    /// still clears any grant an earlier configuration may have installed.
     privileged_access: Option<PrivilegedSandboxAccessConfig>,
 }
 
@@ -373,6 +374,18 @@ pub struct CreateOrGetSessionOutcome {
     /// Set only when a new-session request named an unavailable persona and
     /// the returned session uses this request's resolved fallback.
     pub unavailable_requested_persona_id: Option<String>,
+}
+
+/// Optional inputs a create-or-get call may carry beyond the required session
+/// identity. Grouped so the internal create path stays within argument limits.
+struct CreateSessionOptions<'a> {
+    /// Ingress-attested original requester snapshot. Only the HTTP create route
+    /// supplies one; internal creators leave it unset so their sessions stay
+    /// ungated forever.
+    original_requester: Option<Value>,
+    /// Existing iron-control principal to bind, selected by foreign ID. When
+    /// unset the session keeps the principal derived from its thread key.
+    principal_foreign_id: Option<&'a str>,
 }
 
 /// Outcome of [`SessionRuntime::drain`]: the sandboxes that were stopped and
@@ -1598,6 +1611,8 @@ impl SessionRuntime {
     /// Create or load a session and bind it to an existing iron-control
     /// principal selected by foreign ID. When no foreign ID is supplied, the
     /// session keeps the normal principal derived from its thread key.
+    /// Internal creators (workflow agent turns) supply no original requester,
+    /// so their sessions stay ungated forever.
     pub async fn create_or_get_session_with_principal(
         &self,
         thread_key: &ThreadKey,
@@ -1607,6 +1622,61 @@ impl SessionRuntime {
         on_harness_conflict: HarnessConflictPolicy,
         principal_foreign_id: Option<&str>,
     ) -> Result<CreateOrGetSessionOutcome, SessionRuntimeError> {
+        self.create_or_get_session_impl(
+            thread_key,
+            harness_type,
+            persona_id,
+            metadata,
+            on_harness_conflict,
+            CreateSessionOptions {
+                original_requester: None,
+                principal_foreign_id,
+            },
+        )
+        .await
+    }
+
+    /// Create or load a session with an ingress-attested original requester.
+    /// Only the HTTP create route calls this: the immutable requester
+    /// snapshot security gates read must come from the chat ingress that
+    /// verified the thread author, never from caller-controlled metadata
+    /// (see original_requester_snapshot in centaur-session-core).
+    pub async fn create_or_get_session_with_requester(
+        &self,
+        thread_key: &ThreadKey,
+        harness_type: &HarnessType,
+        persona_id: Option<&str>,
+        metadata: Option<Value>,
+        original_requester: Option<Value>,
+        on_harness_conflict: HarnessConflictPolicy,
+    ) -> Result<CreateOrGetSessionOutcome, SessionRuntimeError> {
+        self.create_or_get_session_impl(
+            thread_key,
+            harness_type,
+            persona_id,
+            metadata,
+            on_harness_conflict,
+            CreateSessionOptions {
+                original_requester,
+                principal_foreign_id: None,
+            },
+        )
+        .await
+    }
+
+    async fn create_or_get_session_impl(
+        &self,
+        thread_key: &ThreadKey,
+        harness_type: &HarnessType,
+        persona_id: Option<&str>,
+        metadata: Option<Value>,
+        on_harness_conflict: HarnessConflictPolicy,
+        options: CreateSessionOptions<'_>,
+    ) -> Result<CreateOrGetSessionOutcome, SessionRuntimeError> {
+        let CreateSessionOptions {
+            original_requester,
+            principal_foreign_id,
+        } = options;
         let principal_foreign_id = match principal_foreign_id {
             Some(foreign_id) if foreign_id.trim().is_empty() => {
                 return Err(SessionRuntimeError::BadRequest(
@@ -1671,12 +1741,13 @@ impl SessionRuntime {
             }
             match self
                 .store
-                .create_or_get_session(
+                .create_or_get_session_with_requester(
                     thread_key,
                     harness_type,
                     persona_resolution.persona_id.as_deref(),
                     session_metadata.clone(),
                     proxy_labels.clone(),
+                    original_requester,
                 )
                 .await
             {
@@ -3308,13 +3379,18 @@ impl SessionRuntime {
 
     /// Reconcile approver-gated privileged sandbox access after a sandbox is
     /// bound to a session: gated sessions get the credential payload and its
-    /// egress; every other session is cleared. Evaluated from the session's
+    /// egress; every other bind clears any grant an earlier bind (or an
+    /// earlier configuration) may have left. Evaluated from the session's
     /// immutable original requester and the CURRENT configuration on every
-    /// bind, so a grant can never outlive an approver-list change and a
-    /// warm-pool spare stays keyless until the bind that claims it.
+    /// bind, so a grant can never outlive an approver-list change, a
+    /// warm-pool spare stays keyless until the bind that claims it, and
+    /// turning the feature off entirely still revokes existing grants.
     ///
-    /// Fail-closed: a gated session whose credentials cannot be installed
-    /// fails the turn; clearing never fails a turn.
+    /// Fail-closed in both directions: a gated session whose credentials
+    /// cannot be installed fails the turn, and a clear that cannot prove it
+    /// removed a grant fails the turn too, so a revoked grant can never
+    /// linger silently. The backend skips the whole clear cheaply when the
+    /// sandbox never held one.
     async fn reconcile_privileged_access(
         &self,
         thread_key: &ThreadKey,
@@ -3322,57 +3398,63 @@ impl SessionRuntime {
         original_requester: Option<&Value>,
         sandbox_id: &SandboxId,
     ) -> Result<(), SessionRuntimeError> {
-        let Some(config) = self.privileged_access.as_ref() else {
-            return Ok(());
-        };
-        let gated = original_requester.is_some_and(|snapshot| {
-            original_requester_is_approver(snapshot, &config.approver_user_ids)
+        let gated_config = self.privileged_access.as_ref().filter(|config| {
+            original_requester.is_some_and(|snapshot| {
+                original_requester_is_approver(snapshot, &config.approver_user_ids)
+            })
         });
-        if !gated {
-            if let Err(error) = self
-                .sandbox_runtime
-                .manager
-                .clear_privileged_access(sandbox_id)
-                .await
-            {
-                warn!(
+        match gated_config {
+            Some(config) => {
+                let access = self.privileged_access_payload(config)?;
+                self.sandbox_runtime
+                    .manager
+                    .install_privileged_access(sandbox_id, &access)
+                    .await
+                    .inspect_err(|error| {
+                        error!(
+                            component = COMPONENT_SESSION_RUNTIME,
+                            event = "sandbox_privileged_access_install_failed",
+                            thread_key = %thread_key,
+                            execution_id,
+                            sandbox_id = %sandbox_id.as_str(),
+                            %error,
+                            "privileged sandbox access install failed; failing the turn closed"
+                        );
+                    })?;
+                info!(
                     component = COMPONENT_SESSION_RUNTIME,
-                    event = "sandbox_privileged_access_clear_failed",
+                    event = "sandbox_privileged_access_installed",
                     thread_key = %thread_key,
                     execution_id,
                     sandbox_id = %sandbox_id.as_str(),
-                    %error,
-                    "failed to clear privileged sandbox access; continuing without a grant"
+                    egress_cidrs = ?config.egress_cidrs,
+                    egress_port = config.egress_port,
+                    "privileged sandbox access installed"
                 );
             }
-            return Ok(());
+            None => {
+                // Not gated — including "the feature is off entirely", which
+                // must still revoke grants a previous configuration installed.
+                // The backend skips the whole clear when the sandbox never
+                // held a grant; any failure fails the turn closed so a
+                // revoked grant can never linger silently.
+                self.sandbox_runtime
+                    .manager
+                    .clear_privileged_access(sandbox_id)
+                    .await
+                    .inspect_err(|error| {
+                        error!(
+                            component = COMPONENT_SESSION_RUNTIME,
+                            event = "sandbox_privileged_access_clear_failed",
+                            thread_key = %thread_key,
+                            execution_id,
+                            sandbox_id = %sandbox_id.as_str(),
+                            %error,
+                            "failed to clear privileged sandbox access; failing the turn closed"
+                        );
+                    })?;
+            }
         }
-        let access = self.privileged_access_payload(config)?;
-        self.sandbox_runtime
-            .manager
-            .install_privileged_access(sandbox_id, &access)
-            .await
-            .inspect_err(|error| {
-                error!(
-                    component = COMPONENT_SESSION_RUNTIME,
-                    event = "sandbox_privileged_access_install_failed",
-                    thread_key = %thread_key,
-                    execution_id,
-                    sandbox_id = %sandbox_id.as_str(),
-                    %error,
-                    "privileged sandbox access install failed; failing the turn closed"
-                );
-            })?;
-        info!(
-            component = COMPONENT_SESSION_RUNTIME,
-            event = "sandbox_privileged_access_installed",
-            thread_key = %thread_key,
-            execution_id,
-            sandbox_id = %sandbox_id.as_str(),
-            egress_cidrs = ?config.egress_cidrs,
-            egress_port = config.egress_port,
-            "privileged sandbox access installed"
-        );
         Ok(())
     }
 
@@ -9433,6 +9515,8 @@ mod adoption_tests {
         stopped: std::sync::Mutex<Vec<String>>,
         proxy_ensures: std::sync::Mutex<Vec<ProxyEnsure>>,
         missing_on_stop: std::sync::Mutex<BTreeSet<String>>,
+        privileged_access_clears: std::sync::Mutex<Vec<String>>,
+        privileged_access_clear_fails: AtomicBool,
     }
 
     impl MockBackend {
@@ -9451,6 +9535,8 @@ mod adoption_tests {
                 stopped: std::sync::Mutex::new(Vec::new()),
                 proxy_ensures: std::sync::Mutex::new(Vec::new()),
                 missing_on_stop: std::sync::Mutex::new(BTreeSet::new()),
+                privileged_access_clears: std::sync::Mutex::new(Vec::new()),
+                privileged_access_clear_fails: AtomicBool::new(false),
             }
         }
 
@@ -9512,6 +9598,15 @@ mod adoption_tests {
 
         fn created_specs(&self) -> Vec<SandboxSpec> {
             self.created_specs.lock().unwrap().clone()
+        }
+
+        fn privileged_access_clears(&self) -> Vec<String> {
+            self.privileged_access_clears.lock().unwrap().clone()
+        }
+
+        fn fail_privileged_access_clear(&self) {
+            self.privileged_access_clear_fails
+                .store(true, Ordering::SeqCst);
         }
     }
 
@@ -9611,6 +9706,17 @@ mod adoption_tests {
             self.set_observed_status(_id.as_str(), SandboxStatus::Running);
             Ok(())
         }
+
+        async fn clear_privileged_access(&self, id: &SandboxId) -> SandboxResult<()> {
+            self.privileged_access_clears
+                .lock()
+                .unwrap()
+                .push(id.as_str().to_owned());
+            if self.privileged_access_clear_fails.load(Ordering::SeqCst) {
+                return Err(SandboxError::io("mock privileged access clear failed"));
+            }
+            Ok(())
+        }
     }
 
     fn mock_io() -> (SandboxIo, DuplexStream, DuplexStream) {
@@ -9646,6 +9752,67 @@ mod adoption_tests {
         let mut output = completed_output_lines(result_text).join("\n");
         output.push('\n');
         output.into_bytes()
+    }
+
+    fn runtime_for_privileged_access_tests(backend: Arc<MockBackend>) -> SessionRuntime {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://postgres:postgres@127.0.0.1:1/unused")
+            .expect("create lazy test pool");
+        SessionRuntime::new(
+            PgSessionStore::new(pool),
+            SandboxRuntime::backend(backend, SandboxSpec::new("mock")),
+            TestSessionPrincipalRegistrar,
+        )
+    }
+
+    #[tokio::test]
+    async fn privileged_access_is_cleared_when_unconfigured_or_approvers_are_empty() {
+        let backend = Arc::new(MockBackend::new(SandboxStatus::Running, Vec::new()));
+        let runtime = runtime_for_privileged_access_tests(backend.clone());
+        let thread_key = ThreadKey::parse("slack:C123:123.456").unwrap();
+        let sandbox_id = SandboxId::new("mock-sbx");
+
+        runtime
+            .reconcile_privileged_access(&thread_key, "execution-unconfigured", None, &sandbox_id)
+            .await
+            .unwrap();
+        runtime
+            .clone()
+            .with_privileged_access_config(PrivilegedSandboxAccessConfig {
+                approver_user_ids: Vec::new(),
+                credentials_dir: "/unused".into(),
+                egress_cidrs: Vec::new(),
+                egress_port: 22,
+            })
+            .reconcile_privileged_access(
+                &thread_key,
+                "execution-empty-approvers",
+                None,
+                &sandbox_id,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(backend.privileged_access_clears(), ["mock-sbx", "mock-sbx"]);
+    }
+
+    #[tokio::test]
+    async fn privileged_access_clear_failure_fails_the_turn_closed() {
+        let backend = Arc::new(MockBackend::new(SandboxStatus::Running, Vec::new()));
+        backend.fail_privileged_access_clear();
+        let runtime = runtime_for_privileged_access_tests(backend);
+        let thread_key = ThreadKey::parse("slack:C123:123.456").unwrap();
+
+        let result = runtime
+            .reconcile_privileged_access(
+                &thread_key,
+                "execution-clear-failure",
+                None,
+                &SandboxId::new("mock-sbx"),
+            )
+            .await;
+
+        assert!(matches!(result, Err(SessionRuntimeError::Sandbox(_))));
     }
 
     async fn test_store() -> Option<PgSessionStore> {

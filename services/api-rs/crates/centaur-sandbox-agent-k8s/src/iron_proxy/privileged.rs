@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use k8s_openapi::api::networking::v1::{
     IPBlock, NetworkPolicy, NetworkPolicyPeer, NetworkPolicySpec,
 };
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, LabelSelectorRequirement};
 use kube::api::{AttachParams, DeleteParams, PostParams};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -35,6 +36,17 @@ const PRIVILEGED_ACCESS_LABEL: &str = "centaur.ai/privileged-access";
 /// records the installed payload, making reinstall idempotent.
 const FINGERPRINT_FILE: &str = ".payload-fingerprint";
 
+/// Fingerprint inside the managed ssh client config: a config containing
+/// this marker is ours to remove on clear; anything else belongs to the
+/// sandbox user and is preserved (backed up on install, restored on clear).
+const SSH_CONFIG_MARKER: &str = "centaur-privileged/ssh_config";
+const SSH_CONFIG_BACKUP_PATH: &str = "/home/agent/.ssh/config.pre-centaur-privileged";
+/// The ~/.ssh directory inside the sandbox (parent of the managed config).
+const SANDBOX_SSH_DIR: &str = "/home/agent/.ssh";
+/// Upper bound for a clear exec: a stuck clear must fail the turn closed
+/// instead of hanging it.
+const CLEAR_EXEC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 impl AgentSandboxBackend {
     /// Install the privileged-access payload into a running sandbox pod and
     /// ensure its egress allowance exists. Idempotent: an identical payload
@@ -45,7 +57,14 @@ impl AgentSandboxBackend {
         access: &PrivilegedSandboxAccess,
     ) -> SandboxResult<()> {
         validate_access_files(&access.files)?;
+        validate_access_cidrs(&access.egress_cidrs)?;
         let fingerprint = access_fingerprint(access);
+        // The policy is the durable "payload present" marker: create it
+        // BEFORE any file is written, and clear removes it LAST. A partially
+        // failed install therefore still leaves the marker so the next clear
+        // removes whatever landed; and "no policy" always proves no key file
+        // exists, so clear can skip sandboxes that never held a grant.
+        self.ensure_privileged_access_policy(id, access).await?;
         if self.read_installed_fingerprint(id).await? != Some(fingerprint.clone()) {
             for file in &access.files {
                 self.exec_install_file(id, file).await?;
@@ -60,27 +79,81 @@ impl AgentSandboxBackend {
             )
             .await?;
         }
-        self.ensure_privileged_access_policy(id, access).await
+        Ok(())
     }
 
-    /// Best-effort removal of the privileged-access payload and its egress
-    /// allowance. A missing pod or policy is success: pod teardown already
-    /// destroys the installed files, and the goal state is "no privileged
-    /// access".
+    /// Remove the privileged-access payload and its egress allowance from a
+    /// sandbox. The per-sandbox policy is the "payload present" marker
+    /// (created before any file on install, removed last here), so a sandbox
+    /// without it never held a grant and the whole clear is skipped without a
+    /// pod exec. Fail-closed: a payload that cannot be proven removed — a
+    /// failed file removal on a live pod, or a policy that will not delete —
+    /// is an error, so a revoked grant can never linger silently. A missing
+    /// pod is success (teardown already destroyed the installed files).
     pub(crate) async fn clear_privileged_access_resources(
         &self,
         id: &SandboxId,
     ) -> SandboxResult<()> {
-        let command =
-            format!("rm -rf {SANDBOX_PRIVILEGED_ACCESS_DIR} && rm -f {SANDBOX_SSH_CONFIG_PATH}");
-        if let Err(error) = self.exec_sandbox_command(id, &command, None).await {
-            tracing::debug!(
-                sandbox_id = id.as_str(),
-                %error,
-                "privileged access file removal skipped (sandbox likely gone)"
-            );
+        if !self.privileged_access_policy_exists(id).await? {
+            return Ok(());
         }
+        let command = format!(
+            "for p in {SANDBOX_SSH_DIR} {SANDBOX_PRIVILEGED_ACCESS_DIR} {SANDBOX_SSH_CONFIG_PATH} {SSH_CONFIG_BACKUP_PATH}; do \
+             if [ -L \"$p\" ]; then rm -f \"$p\"; exit 1; fi; \
+             done; \
+             rm -rf {SANDBOX_PRIVILEGED_ACCESS_DIR}; \
+             if [ -f {SANDBOX_SSH_CONFIG_PATH} ] && grep -q {SSH_CONFIG_MARKER} {SANDBOX_SSH_CONFIG_PATH}; then \
+             if [ -f {SSH_CONFIG_BACKUP_PATH} ]; then mv {SSH_CONFIG_BACKUP_PATH} {SANDBOX_SSH_CONFIG_PATH}; \
+             else rm -f {SANDBOX_SSH_CONFIG_PATH}; fi; \
+             fi"
+        );
+        match tokio::time::timeout(
+            CLEAR_EXEC_TIMEOUT,
+            self.exec_sandbox_command(id, &command, None),
+        )
+        .await
+        {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) if self.sandbox_pod_is_gone(id).await => {
+                // Pod teardown already destroyed the installed files.
+                tracing::debug!(
+                    sandbox_id = id.as_str(),
+                    %error,
+                    "privileged access file removal skipped (sandbox gone)"
+                );
+            }
+            Ok(Err(error)) => return Err(error),
+            Err(_elapsed) => {
+                return Err(SandboxError::io("privileged access clear exec timed out"));
+            }
+        }
+        // Delete the marker last: while it exists, a later clear retries.
         self.delete_privileged_access_policy(id).await
+    }
+
+    /// Whether the sandbox workload pod is gone (404). Distinguishes "sandbox
+    /// already torn down" (teardown removed the files) from a live pod whose
+    /// clear genuinely failed.
+    async fn sandbox_pod_is_gone(&self, id: &SandboxId) -> bool {
+        matches!(self.pods().get(id.as_str()).await, Err(err) if crate::is_not_found(&err))
+    }
+
+    /// Whether the per-sandbox privileged egress policy exists. The policy is
+    /// the durable "payload present" marker: created before any payload file
+    /// and removed only after them.
+    async fn privileged_access_policy_exists(&self, id: &SandboxId) -> SandboxResult<bool> {
+        match self
+            .network_policies()
+            .get(&privileged_access_policy_name(id))
+            .await
+        {
+            Ok(_) => Ok(true),
+            Err(err) if crate::is_not_found(&err) => Ok(false),
+            Err(err) => Err(crate::map_kube_error(
+                "read privileged access network policy",
+                err,
+            )),
+        }
     }
 
     /// Read the installed payload fingerprint, or `None` when the payload is
@@ -104,14 +177,34 @@ impl AgentSandboxBackend {
 
     /// Write one payload file into the sandbox pod via exec stdin, so the
     /// bytes never land in the command line, ConfigMaps, Secrets, or logs.
+    /// The file is created under umask 077 (the private key is never
+    /// world-readable, even between creation and chmod); a symlink planted at
+    /// any managed path component is removed and the install fails closed
+    /// (the payload is never written through a link); and a foreign
+    /// ~/.ssh/config is backed up instead of clobbered.
     async fn exec_install_file(
         &self,
         id: &SandboxId,
         file: &PrivilegedSandboxFile,
     ) -> SandboxResult<()> {
         let parent = parent_directory(&file.path);
+        let symlink_guard = format!(
+            "for p in {SANDBOX_SSH_DIR} {parent} {path}; do \
+             if [ -L \"$p\" ]; then rm -f \"$p\"; exit 1; fi; \
+             done",
+            path = file.path,
+        );
+        let preserve_config = if file.path == SANDBOX_SSH_CONFIG_PATH {
+            format!(
+                "if [ -f {path} ] && ! grep -q {SSH_CONFIG_MARKER} {path}; then \
+                 mv {path} {SSH_CONFIG_BACKUP_PATH}; fi; ",
+                path = file.path,
+            )
+        } else {
+            String::new()
+        };
         let command = format!(
-            "mkdir -p {parent} && cat > {path} && chmod {mode:o} {path}",
+            "umask 077 && {symlink_guard} && {preserve_config}mkdir -p {parent} && cat > {path} && chmod {mode:o} {path}",
             path = file.path,
             mode = file.mode,
         );
@@ -252,6 +345,21 @@ fn privileged_access_labels(id: &SandboxId) -> BTreeMap<String, String> {
     labels
 }
 
+/// Pod selector for the grant: the sandbox workload pod only. The paired
+/// iron-proxy pod carries the same sandbox labels, so the selector must
+/// explicitly exclude it — otherwise the proxy would also gain TCP/22 egress
+/// to the pinned destinations.
+fn privileged_access_pod_selector(id: &SandboxId) -> LabelSelector {
+    LabelSelector {
+        match_labels: Some(super::sandbox_labels(id)),
+        match_expressions: Some(vec![LabelSelectorRequirement {
+            key: super::IRON_PROXY_LABEL.to_owned(),
+            operator: "DoesNotExist".to_owned(),
+            values: None,
+        }]),
+    }
+}
+
 fn privileged_access_network_policy(
     id: &SandboxId,
     access: &PrivilegedSandboxAccess,
@@ -273,7 +381,7 @@ fn privileged_access_network_policy(
             privileged_access_labels(id),
         ),
         spec: Some(NetworkPolicySpec {
-            pod_selector: Some(super::label_selector(super::sandbox_labels(id))),
+            pod_selector: Some(privileged_access_pod_selector(id)),
             ingress: None,
             policy_types: Some(vec!["Egress".to_owned()]),
             egress: Some(vec![super::egress_to(
@@ -310,6 +418,23 @@ fn validate_access_files(files: &[PrivilegedSandboxFile]) -> SandboxResult<()> {
         if !allowed {
             return Err(SandboxError::io(format!(
                 "privileged access file path must be shell-safe and under {SANDBOX_PRIVILEGED_ACCESS_DIR} (or {SANDBOX_SSH_CONFIG_PATH}): {path}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Destination CIDRs must each be a single IPv4 host route (a.b.c.d/32).
+/// Anything broader would silently widen the grant beyond the pinned
+/// destinations, and anything malformed fails the install closed.
+fn validate_access_cidrs(cidrs: &[String]) -> SandboxResult<()> {
+    for cidr in cidrs {
+        let single_host = cidr
+            .strip_suffix("/32")
+            .is_some_and(|ip| ip.parse::<std::net::Ipv4Addr>().is_ok());
+        if !single_host {
+            return Err(SandboxError::io(format!(
+                "privileged access egress CIDR must be a single-host IPv4 CIDR (a.b.c.d/32): {cidr}"
             )));
         }
     }
@@ -409,6 +534,14 @@ mod tests {
         let spec = policy.spec.expect("policy spec");
         let pod_selector = spec.pod_selector.expect("pod selector");
         assert!(!pod_selector.match_labels.expect("match labels").is_empty());
+        let expressions = pod_selector.match_expressions.expect("match expressions");
+        assert_eq!(expressions.len(), 1);
+        assert_eq!(expressions[0].key, "centaur.ai/iron-proxy");
+        assert_eq!(expressions[0].operator, "DoesNotExist");
+        assert!(
+            expressions[0].values.is_none(),
+            "the paired iron-proxy pod must not match the grant"
+        );
         assert_eq!(
             spec.policy_types.as_deref(),
             Some(["Egress".to_owned()].as_slice()),
@@ -460,6 +593,29 @@ mod tests {
             )])
             .is_err()
         );
+    }
+
+    #[test]
+    fn validate_accepts_single_host_ipv4_cidrs_only() {
+        assert!(
+            validate_access_cidrs(&[
+                "10.200.160.152/32".to_owned(),
+                "10.200.160.153/32".to_owned(),
+            ])
+            .is_ok()
+        );
+        for invalid in [
+            "10.200.160.0/24",
+            "10.200.160.152",
+            "10.200.160.152/33",
+            "fd00::1/32",
+            "",
+        ] {
+            assert!(
+                validate_access_cidrs(&[invalid.to_owned()]).is_err(),
+                "a non-/32 or non-IPv4 CIDR must fail closed: {invalid:?}"
+            );
+        }
     }
 
     #[test]
