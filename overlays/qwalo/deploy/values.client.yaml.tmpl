@@ -1,0 +1,131 @@
+# Per-client Centaur release values — Qwalo overlay.
+#
+# Rendered by overlays/qwalo/deploy/deploy-client.sh <client>. Do not hand-edit the
+# rendered copy; it lives in a temp directory and is deleted on exit.
+#
+# NO SECRET BELONGS IN THIS FILE. Slack credentials, the signing secret, the
+# slackbot API key, database URLs, and the engine token are read from
+# op://prod-qwalo-<<CLIENT>>/... at apply time and written into the
+# <<NAMESPACE>> Secret centaur-infra-env, which the chart consumes with
+# secretManager.existingSecretName (see deploy/RELEASE.md step 4).
+# Placeholders the script substitutes: <<CLIENT>> <<NAMESPACE>> <<HOST>>
+# <<ENGINE_URL>> <<ENGINE_SCOPE>> <<REGISTRY>> <<TAG>> <<TOOL_REF>>
+
+x-release: &release
+  registry: "<<REGISTRY>>"
+  tag: "<<TAG>>"
+  pullPolicy: IfNotPresent
+
+# --- Qwalo overlay delivery -----------------------------------------------------
+# The overlay's tools ride the same repo-cache + tools-bootstrap path as Raava's:
+# later sources shadow earlier ones on directory-name collision, so an overlay
+# tool wins over a base tool of the same name without forking it.
+toolServer:
+  enabled: true
+  repo: raava-solutions/centaur
+  ref: "<<TOOL_REF>>"
+  subdir: tools
+  extraSources:
+    - repo: raava-solutions/centaur
+      ref: "<<TOOL_REF>>"
+      subdir: overlays/qwalo/tools
+
+# The Qwalo sandbox prompt. RENDERED IN BY THE SCRIPT with --set-file, never
+# inlined here, so this file cannot drift from the source. See README.md
+# "Inert today": on the Rust control plane this reaches api-rs only, not a
+# sandbox pod, and the persona prompt is not delivered either.
+overlay:
+  mountPath: /app/overlay/org
+  systemPrompt: ""
+
+# --- Control plane --------------------------------------------------------------
+apiRs:
+  enabled: true
+  image:
+    repository: centaur-api-rs
+    <<: *release
+  # One client per release: a small warm pool is enough for a Slack-first
+  # assistant, and it keeps a cold first turn off the owner's patience.
+  sandboxWarmPoolSize: 1
+  ironProxy:
+    mode: enabled
+  resources:
+    requests:
+      cpu: 100m
+      memory: 384Mi
+    limits:
+      memory: 1024Mi
+
+slackbotv2:
+  enabled: true
+  image:
+    repository: centaur-slackbotv2
+    <<: *release
+  userName: qwalo-<<CLIENT>>
+  resources:
+    requests:
+      cpu: 25m
+      memory: 96Mi
+    limits:
+      memory: 256Mi
+
+# --- Sandboxes ------------------------------------------------------------------
+sandbox:
+  image:
+    repository: centaur-agent
+    <<: *release
+  harnessEngine: codex
+  codexAuthMode: access_token
+  # The engine tool reads these three in the sandbox. The token is NOT here: it
+  # is an iron-proxy inject-mode secret declared in
+  # overlays/qwalo/tools/engine/pyproject.toml, so the sandbox never holds it.
+  # QWALO_ACCOUNT_SCOPE is the tenant boundary — the engine refuses any other
+  # scope for this release's token, and the tool offers no way to override it.
+  extraEnv:
+    QWALO_ENGINE_URL: "<<ENGINE_URL>>"
+    QWALO_ACCOUNT_SCOPE: "<<ENGINE_SCOPE>>"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+
+# --- Slack edge -----------------------------------------------------------------
+# The manifest's request_url is https://<<HOST>>/api/webhooks/slack. Set it in
+# the Slack app only after this release is rolled out and the engine token
+# probe passed (RELEASE.md step 8).
+ingress:
+  enabled: true
+  host: "<<HOST>>"
+
+# --- State: one database, one namespace, one client ------------------------------
+postgres:
+  image:
+    pullPolicy: IfNotPresent
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClassName: local-path
+  resources:
+    requests:
+      cpu: 100m
+      memory: 384Mi
+    limits:
+      memory: 1Gi
+
+# The agent-sandbox controller is cluster-scoped: install it once, then let
+# every client release use it. Keep false when a controller already exists in
+# agent-sandbox-system, or two controllers will fight over the same Sandbox CRs.
+agentSandbox:
+  enabled: false
+
+# Not expressible as chart values today. Each one is a real gap, not a TODO:
+#   1. Overlay personas. persona_id carries no prompt on the Rust control plane
+#      (deploy/READINESS.md in the raava overlay), so tools/personas/qwalo does
+#      not reach a sandbox yet.
+#   2. Overlay system prompt. overlay.systemPrompt renders a ConfigMap mounted
+#      only on api-rs; no sandbox template consumes CENTAUR_OVERLAY_DIR.
+#   3. Overlay workflows. WORKFLOW_DIRS ignores toolServer.extraSources[].subdir.
+#      Qwalo ships no workflows today, so nothing is lost; do not add one until
+#      this is fixed.

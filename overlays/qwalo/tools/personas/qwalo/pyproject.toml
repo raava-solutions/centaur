@@ -1,0 +1,9 @@
+[project]
+name = "qwalo"
+description = "Qwalo lead-qualification assistant (read-only)"
+version = "0.1.0"
+
+[tool.centaur]
+type = "persona"
+engine = "codex"
+prompt = "PROMPT.md"

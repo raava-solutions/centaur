@@ -1,0 +1,603 @@
+{
+  "engine_contract": "src/v1/routes.ts + src/v1/auth.ts in raava-solutions/qwaelo-ai-engine (main f5a81e1); read routes per the t-0027 contract, which is not merged yet",
+  "fake_engine": {
+    "account_scopes": [
+      "ere"
+    ],
+    "bearer": "e2e-read-token",
+    "fixtures": "synthetic only"
+  },
+  "generated_at": "2026-10-20T16:22:39+00:00",
+  "how_it_runs": "uvx --from overlays/qwalo/tools/engine engine <verb>, the same entrypoint the sandbox CLI shim uses",
+  "passed": 25,
+  "results": [
+    {
+      "case": "leads_are_read",
+      "detail": "two synthetic leads, newest first",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "leads",
+          "--limit",
+          "5"
+        ],
+        "exit": 0,
+        "json": {
+          "account_scope": "ere",
+          "leads": [
+            {
+              "external_id": "sc-synthetic-0001",
+              "probability_qualified": 0.93,
+              "stage": "clef",
+              "updated_at": "2026-10-20T00:00:00Z",
+              "verdict": "qualified"
+            },
+            {
+              "external_id": "sc-synthetic-0002",
+              "probability_qualified": 0.51,
+              "stage": null,
+              "updated_at": "2026-10-20T00:05:00Z",
+              "verdict": "cannot_tell"
+            }
+          ],
+          "next_cursor": null
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer e2e-read-token",
+          "method": "GET",
+          "path": "/v1/leads",
+          "query": {
+            "account_scope": "ere",
+            "limit": "5"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "lead_is_read",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "lead",
+          "sc-synthetic-0001"
+        ],
+        "exit": 0,
+        "json": {
+          "account_scope": "ere",
+          "external_id": "sc-synthetic-0001",
+          "snapshots": []
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer e2e-read-token",
+          "method": "GET",
+          "path": "/v1/leads/sc-synthetic-0001",
+          "query": {
+            "account_scope": "ere"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "verdict_is_read",
+      "detail": "verdict, probability, and thresholds come back intact",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "verdict",
+          "sc-synthetic-0001"
+        ],
+        "exit": 0,
+        "json": {
+          "account_scope": "ere",
+          "confidence": 0.93,
+          "external_id": "sc-synthetic-0001",
+          "label": null,
+          "probability_qualified": 0.93,
+          "stage": "clef",
+          "thresholds": {
+            "clef": 0.85,
+            "glm": 0.8
+          },
+          "transcript_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "verdict": "qualified"
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer e2e-read-token",
+          "method": "GET",
+          "path": "/v1/leads/sc-synthetic-0001/verdict",
+          "query": {
+            "account_scope": "ere"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "queue_is_read",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "queue",
+          "--limit",
+          "5"
+        ],
+        "exit": 0,
+        "json": {
+          "account_scope": "ere",
+          "queue": [
+            {
+              "external_id": "sc-synthetic-0002",
+              "reason": "models could not decide; queued for a human label"
+            }
+          ]
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer e2e-read-token",
+          "method": "GET",
+          "path": "/v1/review-queue",
+          "query": {
+            "account_scope": "ere",
+            "limit": "5"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "metrics_are_read",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "metrics"
+        ],
+        "exit": 0,
+        "json": {
+          "account_scope": "ere",
+          "totals": {
+            "needs_human": 1,
+            "qualified": 1
+          }
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer e2e-read-token",
+          "method": "GET",
+          "path": "/v1/metrics",
+          "query": {
+            "account_scope": "ere"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "bearer_token_is_sent",
+      "detail": "1 request(s) carried the bearer",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "metrics"
+        ],
+        "exit": 0,
+        "json": {
+          "account_scope": "ere",
+          "totals": {
+            "needs_human": 1,
+            "qualified": 1
+          }
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer e2e-read-token",
+          "method": "GET",
+          "path": "/v1/metrics",
+          "query": {
+            "account_scope": "ere"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "scope_is_forced_by_env",
+      "passed": true,
+      "ran": {
+        "accepted": {
+          "argv": [
+            "leads"
+          ],
+          "exit": 0,
+          "json": {
+            "account_scope": "ere",
+            "leads": [
+              {
+                "external_id": "sc-synthetic-0001",
+                "probability_qualified": 0.93,
+                "stage": "clef",
+                "updated_at": "2026-10-20T00:00:00Z",
+                "verdict": "qualified"
+              },
+              {
+                "external_id": "sc-synthetic-0002",
+                "probability_qualified": 0.51,
+                "stage": null,
+                "updated_at": "2026-10-20T00:05:00Z",
+                "verdict": "cannot_tell"
+              }
+            ],
+            "next_cursor": null
+          }
+        },
+        "rejected": {
+          "argv": [
+            "leads",
+            "--account-scope",
+            "other"
+          ],
+          "exit": 2,
+          "json": {
+            "_stderr": "usage: engine [-h] {leads,lead,verdict,queue,metrics} ...\nengine: error: unrecognized arguments: --account-scope other",
+            "_stdout": ""
+          }
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer e2e-read-token",
+          "method": "GET",
+          "path": "/v1/leads",
+          "query": {
+            "account_scope": "ere",
+            "limit": "20"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "cross_scope_request_is_refused",
+      "detail": "a token held for ere answers 403 for another client, and the tool says so",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "leads"
+        ],
+        "exit": 1,
+        "json": {
+          "error": "wrong_scope",
+          "http_status": 403,
+          "message": "this token may not serve the requested account_scope"
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer e2e-read-token",
+          "method": "GET",
+          "path": "/v1/leads",
+          "query": {
+            "account_scope": "acme",
+            "limit": "20"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "placeholder_token_is_never_sent",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "metrics"
+        ],
+        "exit": 1,
+        "json": {
+          "error": "invalid_token",
+          "http_status": 401,
+          "message": "bearer token required"
+        }
+      },
+      "requests": [
+        {
+          "authorization": null,
+          "method": "GET",
+          "path": "/v1/metrics",
+          "query": {
+            "account_scope": "ere"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "invalid_token_is_reported",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "metrics"
+        ],
+        "exit": 1,
+        "json": {
+          "error": "invalid_token",
+          "http_status": 401,
+          "message": "invalid token"
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer expired-e2e-token",
+          "method": "GET",
+          "path": "/v1/metrics",
+          "query": {
+            "account_scope": "ere"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "engine_503_is_reported",
+      "detail": "an unconfigured engine is named, never read as an empty queue",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "metrics"
+        ],
+        "exit": 1,
+        "json": {
+          "error": "service_auth_not_configured",
+          "http_status": 503,
+          "message": "SERVICE_TOKENS is not set; refusing /v1"
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer e2e-read-token",
+          "method": "GET",
+          "path": "/v1/metrics",
+          "query": {
+            "account_scope": "ere"
+          },
+          "scenario": "no_service_tokens"
+        }
+      ]
+    },
+    {
+      "case": "engine_404_is_reported",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "verdict",
+          "sc-synthetic-9999"
+        ],
+        "exit": 1,
+        "json": {
+          "error": "lead_not_found",
+          "http_status": 404,
+          "message": "no verdict for sc-synthetic-9999 in ere"
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer e2e-read-token",
+          "method": "GET",
+          "path": "/v1/leads/sc-synthetic-9999/verdict",
+          "query": {
+            "account_scope": "ere"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "missing_engine_url_fails_closed",
+      "detail": "no request left the process",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "metrics"
+        ],
+        "exit": 1,
+        "json": {
+          "error": "engine_url_missing",
+          "message": "this release has no QWALO_ENGINE_URL; ask the operator"
+        }
+      },
+      "requests": []
+    },
+    {
+      "case": "missing_account_scope_fails_closed",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "metrics"
+        ],
+        "exit": 1,
+        "json": {
+          "error": "account_scope_missing",
+          "message": "this release has no QWALO_ACCOUNT_SCOPE; ask the operator"
+        }
+      },
+      "requests": []
+    },
+    {
+      "case": "engine_unreachable_is_reported",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "metrics"
+        ],
+        "exit": 1,
+        "json": {
+          "error": "engine_unreachable",
+          "message": "cannot reach the engine at http://127.0.0.1:1: [Errno 61] Connection refused"
+        }
+      },
+      "requests": []
+    },
+    {
+      "case": "cli_exposes_no_write_verbs",
+      "detail": "the read surface is the whole surface",
+      "passed": true,
+      "requests": [],
+      "verbs": [
+        "lead",
+        "leads",
+        "metrics",
+        "queue",
+        "verdict"
+      ],
+      "write_calls": []
+    },
+    {
+      "case": "no_write_request_reaches_the_engine",
+      "methods": [
+        "GET"
+      ],
+      "passed": true,
+      "requests": [
+        {
+          "authorization": "Bearer e2e-read-token",
+          "method": "GET",
+          "path": "/v1/leads",
+          "query": {
+            "account_scope": "ere",
+            "limit": "20"
+          },
+          "scenario": "ok"
+        },
+        {
+          "authorization": "Bearer e2e-read-token",
+          "method": "GET",
+          "path": "/v1/leads/sc-synthetic-0001",
+          "query": {
+            "account_scope": "ere"
+          },
+          "scenario": "ok"
+        },
+        {
+          "authorization": "Bearer e2e-read-token",
+          "method": "GET",
+          "path": "/v1/leads/sc-synthetic-0001/verdict",
+          "query": {
+            "account_scope": "ere"
+          },
+          "scenario": "ok"
+        },
+        {
+          "authorization": "Bearer e2e-read-token",
+          "method": "GET",
+          "path": "/v1/review-queue",
+          "query": {
+            "account_scope": "ere",
+            "limit": "20"
+          },
+          "scenario": "ok"
+        },
+        {
+          "authorization": "Bearer e2e-read-token",
+          "method": "GET",
+          "path": "/v1/metrics",
+          "query": {
+            "account_scope": "ere"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "mutation_proves_the_placeholder_guard_bites",
+      "detail": "the placeholder reaches the wire only when the guard is removed",
+      "mutated_tool_sent": [
+        "Bearer QWALO_ENGINE_TOKEN"
+      ],
+      "passed": true,
+      "requests": [
+        {
+          "authorization": "Bearer QWALO_ENGINE_TOKEN",
+          "method": "GET",
+          "path": "/v1/metrics",
+          "query": {
+            "account_scope": "ere"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "only_the_engine_tool_ships",
+      "passed": true,
+      "requests": [],
+      "shipped_tools": [
+        "engine"
+      ]
+    },
+    {
+      "accepted": "client      : ere\nnamespace   : centaur-ere\nhelm release: centaur-ere\nslack host  : https://ere.qwalo.raava.dev\nengine      : https://qwalo.raava.dev scope=ere (token: iron-proxy inject, vault prod-qwalo-ere)\nvalues      : rendered clean (131 lines, deleted on exit)\nmanifest    : rendered clean, event request_url left empty until the release is live\n",
+      "case": "deploy_script_rejects_bad_client",
+      "passed": true,
+      "rejected": {
+        "argv": [
+          "/Volumes/RTL-Worktrees/herdr/centaur/hp-qwaelo-t-0028-centaur-qwalo-overlay-per-client-deploy/overlays/qwalo/deploy/deploy-client.sh",
+          "--check",
+          "ERE_Investors"
+        ],
+        "exit": 2,
+        "stderr": "client must be a lowercase DNS slug (a-z, 0-9, -): got 'ERE_Investors'\n",
+        "stdout": ""
+      },
+      "requests": []
+    },
+    {
+      "case": "manifest_names_only_this_client_host",
+      "detail": "one app, one workspace, one host; no shared router, no unprompted posting scope",
+      "passed": true,
+      "request_url": "https://ere.qwalo.raava.dev/api/webhooks/slack",
+      "requests": []
+    },
+    {
+      "case": "values_template_has_no_secret_values",
+      "literal_secret_assignments": [],
+      "offenders": [],
+      "op_reads": [
+        "op://${VAULT}/${item}/password",
+        "op://${VAULT}/slack bot token/password",
+        "op://${VAULT}/slack signing secret/password",
+        "op://${VAULT}/slackbot api key/password"
+      ],
+      "passed": true,
+      "requests": []
+    },
+    {
+      "case": "deploy_script_gates_the_apply",
+      "detail": "secret refs are proven before apply; the rendered values file is temporary",
+      "passed": true,
+      "requests": []
+    },
+    {
+      "case": "inert_pieces_are_declared",
+      "detail": "the overlay must not claim the persona or prompt is live while the chart does not deliver it",
+      "passed": true,
+      "requests": []
+    },
+    {
+      "case": "fixtures_carry_no_real_contact_data",
+      "detail": "every fixture id is synthetic; no emails or phone numbers in the suite",
+      "passed": true,
+      "requests": []
+    }
+  ],
+  "suite": "qwalo-overlay-engine-fake-engine",
+  "total": 25
+}
