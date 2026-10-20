@@ -4,36 +4,44 @@
 # rendered copy; it lives in a temp directory and is deleted on exit.
 #
 # NO SECRET BELONGS IN THIS FILE. Slack credentials, the signing secret, the
-# slackbot API key, database URLs, and the engine token are read from
-# op://prod-qwalo-<<CLIENT>>/... at apply time and written into the
-# <<NAMESPACE>> Secret centaur-infra-env, which the chart consumes with
+# slackbot API key, database URLs, and the model key are read from
+# op://prod-qwalo-<<CLIENT>>/<SECRET_NAME>/credential at apply time and written
+# into the <<NAMESPACE>> Secret centaur-infra-env, which the chart consumes with
 # secretManager.existingSecretName (see deploy/RELEASE.md step 4).
+#
 # Placeholders the script substitutes: <<CLIENT>> <<NAMESPACE>> <<HOST>>
 # <<ENGINE_URL>> <<ENGINE_SCOPE>> <<REGISTRY>> <<TAG>> <<TOOL_REF>>
+#
+# <<TAG>> and <<TOOL_REF>> are release identity. The script refuses to deploy or
+# render without both, so a client's runtime never floats to whatever main or
+# latest happens to be at the moment someone runs helm.
 
 x-release: &release
   registry: "<<REGISTRY>>"
   tag: "<<TAG>>"
   pullPolicy: IfNotPresent
 
-# --- Qwalo overlay delivery -----------------------------------------------------
-# The overlay's tools ride the same repo-cache + tools-bootstrap path as Raava's:
-# later sources shadow earlier ones on directory-name collision, so an overlay
-# tool wins over a base tool of the same name without forking it.
+# --- Tool delivery: ONLY this overlay's tools reach a sandbox ---------------------
+# toolServer.subdir names the directory the tools-bootstrap init container copies
+# into every sandbox. Pointed at the base `tools` tree it would install all 60+
+# base plugins, including tools/comms/telegram with a working send_message. That
+# would make "this agent cannot message anyone" false. So the source is the
+# overlay's own curated tree, which holds exactly one tool: engine.
+#
+# Consequence to accept deliberately: a Qwalo sandbox has no websearch, no slack,
+# no github. If a client release later needs one, add that tool under
+# overlays/qwalo/tools and review it as an expansion of the agent's capability.
 toolServer:
   enabled: true
   repo: raava-solutions/centaur
   ref: "<<TOOL_REF>>"
-  subdir: tools
-  extraSources:
-    - repo: raava-solutions/centaur
-      ref: "<<TOOL_REF>>"
-      subdir: overlays/qwalo/tools
+  subdir: overlays/qwalo/tools
+  extraSources: []
 
-# The Qwalo sandbox prompt. RENDERED IN BY THE SCRIPT with --set-file, never
-# inlined here, so this file cannot drift from the source. See README.md
-# "Inert today": on the Rust control plane this reaches api-rs only, not a
-# sandbox pod, and the persona prompt is not delivered either.
+# The Qwalo sandbox prompt. The script renders it in with --set-file, never
+# inline, so this file cannot drift from the source. See README.md "Inert today":
+# on the Rust control plane this reaches api-rs only, not a sandbox pod, and the
+# persona prompt is not delivered either.
 overlay:
   mountPath: /app/overlay/org
   systemPrompt: ""
@@ -44,7 +52,7 @@ apiRs:
   image:
     repository: centaur-api-rs
     <<: *release
-  # One client per release: a small warm pool is enough for a Slack-first
+  # One client per release: a small warm pool is enough for a mention-driven
   # assistant, and it keeps a cold first turn off the owner's patience.
   sandboxWarmPoolSize: 1
   ironProxy:
@@ -75,12 +83,17 @@ sandbox:
     repository: centaur-agent
     <<: *release
   harnessEngine: codex
-  codexAuthMode: access_token
-  # The engine tool reads these three in the sandbox. The token is NOT here: it
-  # is an iron-proxy inject-mode secret declared in
-  # overlays/qwalo/tools/engine/pyproject.toml, so the sandbox never holds it.
-  # QWALO_ACCOUNT_SCOPE is the tenant boundary — the engine refuses any other
-  # scope for this release's token, and the tool offers no way to override it.
+  # api_key, not access_token. access_token needs OPENAI_CODEX_CLIENT_ID,
+  # OPENAI_CODEX_BLOB and OPENAI_CODEX_ACCOUNT_ID, and a *writable* 1Password
+  # Connect token to refresh the brokered token. A client vault stays
+  # read-only (RELEASE.md step 0), so the harness runs on a plain OpenAI key.
+  # The owner decides which key a client's turns are billed to.
+  codexAuthMode: api_key
+  # The engine tool reads these two in the sandbox. QWALO_ACCOUNT_SCOPE is the
+  # tenant boundary and the script sets it from the client name with no override.
+  # There is deliberately no token here: the engine bearer is an iron-proxy
+  # inject-mode secret (overlays/qwalo/tools/engine/pyproject.toml), so no
+  # environment variable for it exists in a sandbox at all.
   extraEnv:
     QWALO_ENGINE_URL: "<<ENGINE_URL>>"
     QWALO_ACCOUNT_SCOPE: "<<ENGINE_SCOPE>>"
@@ -92,9 +105,9 @@ sandbox:
       memory: 1Gi
 
 # --- Slack edge -----------------------------------------------------------------
-# The manifest's request_url is https://<<HOST>>/api/webhooks/slack. Set it in
-# the Slack app only after this release is rolled out and the engine token
-# probe passed (RELEASE.md step 8).
+# The manifest's request_url is https://<<HOST>>/api/webhooks/slack. A human sets
+# it only after this release is rolled out and the probes in RELEASE.md step 7
+# passed, and only for this client's own host.
 ingress:
   enabled: true
   host: "<<HOST>>"
@@ -126,6 +139,9 @@ agentSandbox:
 #      not reach a sandbox yet.
 #   2. Overlay system prompt. overlay.systemPrompt renders a ConfigMap mounted
 #      only on api-rs; no sandbox template consumes CENTAUR_OVERLAY_DIR.
-#   3. Overlay workflows. WORKFLOW_DIRS ignores toolServer.extraSources[].subdir.
-#      Qwalo ships no workflows today, so nothing is lost; do not add one until
-#      this is fixed.
+#   3. Overlay workflows. WORKFLOW_DIRS ignores toolServer.extraSources[].subdir
+#      and always points at the repo's workflows directory. Qwalo ships no
+#      workflows today; do not add one until this is fixed.
+#   4. iron-proxy inject mode matches a host, not a method or a path. It stamps
+#      the engine bearer on any request from the sandbox to the engine host,
+#      including a hand-written curl. See FAILURE_MODES.md F2.

@@ -1,5 +1,12 @@
 # Qwalo Centaur overlay — one release per client
 
+> **Scaffolding, not a shipping release.** The engine's read API is not merged, the
+> persona and overlay system prompt do not reach a sandbox pod on the Rust control
+> plane, and the engine cannot yet mint a read-only token. Read
+> [`deploy/RELEASE.md`](deploy/RELEASE.md) step 5 before anyone talks about going
+> live. What is here is the shape of the release, gated and tested, waiting on those
+> three things.
+
 The agent surface for Qwalo's lead-qualification product. Each client gets its own
 Centaur release: its own namespace, its own Slack app, its own engine token scoped to
 one `account_scope`. No Marketplace, no shared router, no shared database. ERE
@@ -21,7 +28,7 @@ and `e2e/run_fake_engine.py` proves most of it.
 | `tools/personas/qwalo/` | Persona id and prompt: read-only qualification reporter |
 | `services/sandbox/SYSTEM_PROMPT.md` | Overlay sandbox prompt (`overlay.systemPrompt`) |
 | `deploy/values.client.yaml.tmpl` | Per-client values; placeholders only, never secrets |
-| `deploy/deploy-client.sh` | `--check` renders and validates; bare run deploys one client |
+| `deploy/deploy-client.sh` | `--check` renders and validates; `--manifest` prints the Slack app manifest; bare run deploys one client |
 | `deploy/slack-app-manifest.json.tmpl` | Slack app manifest, one app per client workspace |
 | `deploy/RELEASE.md` | ERE end to end, including the steps only a human may take |
 | `e2e/run_fake_engine.py` | The E2E gate: the tool against a fake engine, artifact recorded |
@@ -43,6 +50,13 @@ Every request carries `account_scope` from `QWALO_ACCOUNT_SCOPE` and never from 
 caller. Auth is a bearer service token; the engine's own error codes
 (`invalid_token`, `wrong_scope`, `lead_not_found`, `service_auth_not_configured`)
 pass through into the tool's reply so the agent can name the failure.
+
+In a sandbox there is **no token variable at all**. The secret is iron-proxy
+inject-mode, and inject mode seeds no placeholder env var (`placeholder_env()`
+covers replace-mode secrets only), so the tool sends no `Authorization` header and
+iron-proxy adds the real bearer on the way out. The tool still refuses to send a
+value that equals its own name, which is the shape a replace-mode or hand-set
+placeholder has.
 
 Source of truth: `src/v1/routes.ts` and `src/v1/auth.ts` in
 `raava-solutions/qwaelo-ai-engine`. Of those five routes only
@@ -93,8 +107,19 @@ Inherited from the Rust control plane and recorded with source evidence in
 What **is** live: the `engine` tool and its CLI shim (`[project.scripts]` is what
 `services/sandbox/install_tool_shims.py` installs), iron-proxy bearer injection for the
 declared host, per-client namespace, database, Slack app, and the engine's own
-scope enforcement. The read-only guarantee holds because the tool has no write path and
-the token has read scope — not because a prompt says so.
+**account** scope enforcement.
+
+Say the read-only claim precisely, because the loose version is false:
+
+- The **tool** cannot write. It has five read verbs and one GET helper.
+- The **token** is not read-only. The engine scopes it by `account_scope` and never by
+  verb (`TokenSlot` in `src/v1/auth.ts`), and iron-proxy stamps it on **any** request
+  from the sandbox to that host, method and path unchecked. A `curl -X POST` from
+  inside the sandbox to `/v1/labels` would be authenticated.
+- What stops an agent today is the absence of a write path in its tools plus the
+  absence of a SmarterContact credential — not a read-only credential. `RELEASE.md`
+  step 5 makes the read-only token a precondition for go-live, and FAILURE_MODES F2
+  states the hole in full.
 
 ## E2E
 
@@ -106,3 +131,10 @@ Runs the `engine` CLI through `uvx --from overlays/qwalo/tools/engine` against a
 engine that speaks the real auth and error contract, and writes
 `e2e/reports/fake-engine.json`. Nothing is deployed and no credential is read. The
 artifact is committed; a green run should change it.
+
+The suite is deterministic: no timestamp, no absolute path, no ephemeral port in the
+artifact, so two clean runs produce the same bytes and a diff means behaviour moved.
+One case runs `helm template` with the rendered client values against the real chart
+and asserts six facts about the output, including that the tool tree the sandboxes get
+is `overlays/qwalo/tools` and not the base `tools/` tree, which ships a working
+`tools/comms/telegram` `send_message`.

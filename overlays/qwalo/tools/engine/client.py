@@ -9,8 +9,10 @@ Auth and tenancy come from the deployment environment, never from the caller:
 
 - ``QWALO_ENGINE_URL``    engine base URL for this release, e.g. https://qwalo.raava.dev
 - ``QWALO_ACCOUNT_SCOPE`` the one ``account_scope`` this release may read
-- ``QWALO_ENGINE_TOKEN``  bearer token; in a sandbox this is the iron-proxy
-                          placeholder and the real bearer is added in flight
+- ``QWALO_ENGINE_TOKEN``  bearer token, for local runs and tests only. In a
+                          sandbox this variable does not exist: the secret is
+                          iron-proxy inject-mode, which seeds no placeholder env
+                          var, and the real bearer is added in flight
 
 The token is scoped to that one ``account_scope`` on the engine side
 (``src/v1/auth.ts``): a token that asks for another client's scope is answered
@@ -27,9 +29,11 @@ import urllib.request
 from typing import Any
 
 TOKEN_ENV = "QWALO_ENGINE_TOKEN"
-# `placeholder_env()` in centaur-iron-proxy seeds each declared secret as an env
-# var whose value is its own name. Sending that as a bearer would leak nothing
-# and prove nothing, so an unchanged placeholder is treated as "no token here".
+# Defence in depth, not the sandbox path. ``placeholder_env()`` in
+# centaur-iron-proxy seeds *replace-mode* secrets as an env var whose value is
+# its own name; this secret is inject-mode, so a sandbox has no such variable at
+# all. If an operator sets one by hand, or the tool is ever moved to replace
+# mode, a value equal to its own name is not a credential and is not sent.
 PLACEHOLDER = TOKEN_ENV
 USER_AGENT = "centaur-qwalo-overlay/1.0"
 MAX_ERROR_BYTES = 8_192
@@ -91,7 +95,8 @@ class EngineClient:
         url = f"{self.base_url}{path}?{urllib.parse.urlencode(query)}"
         headers = {"accept": "application/json", "user-agent": USER_AGENT}
         # In production iron-proxy injects the bearer (pyproject inject-mode
-        # secret). A real env token is only present for local runs and E2E.
+        # secret) and this environment variable is absent. A real env token is
+        # only present for local runs and E2E.
         if self.token and self.token != PLACEHOLDER:
             headers["authorization"] = f"Bearer {self.token}"
         request = urllib.request.Request(url, headers=headers, method="GET")

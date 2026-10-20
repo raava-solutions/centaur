@@ -27,7 +27,6 @@ import shutil
 import subprocess
 import tempfile
 import threading
-from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -353,6 +352,26 @@ def cross_scope_request_is_refused(base: str) -> dict:
 
 
 @case
+def sandbox_shaped_env_sends_no_bearer(base: str) -> dict:
+    """The real sandbox shape: no token variable exists, and none is invented.
+
+    Inject mode seeds no placeholder env var (placeholder_env() covers
+    replace-mode secrets only), so in a sandbox QWALO_ENGINE_TOKEN is absent
+    and iron-proxy adds the bearer in flight. The tool's job is to send no
+    Authorization header rather than a made-up one (F2, F4).
+    """
+    before = len(REQUEST_LOG)
+    out = run_cli(["metrics"], {"QWALO_ENGINE_URL": base, "QWALO_ACCOUNT_SCOPE": "ere"})
+    seen = REQUEST_LOG[before:]
+    ok = (
+        all(r["authorization"] is None for r in seen)
+        and out["exit"] != 0
+        and out["json"].get("error") == "invalid_token"
+    )
+    return {"ran": out, "requests": seen, "ok": ok}
+
+
+@case
 def placeholder_token_is_never_sent(base: str) -> dict:
     before = len(REQUEST_LOG)
     out = run_cli(["metrics"], cli_env(base, token="QWALO_ENGINE_TOKEN"))
@@ -557,13 +576,16 @@ def values_template_renders_in_the_real_chart(base: str) -> dict:
     prompt_line = (
         (OVERLAY_DIR / "services/sandbox/SYSTEM_PROMPT.md").read_text().splitlines()[0]
     )
+
     def scoped(line_text: str, value: str) -> bool:
         lines = [line for line in rendered.splitlines() if line_text in line]
         return bool(lines) and all(value in line for line in lines)
 
     want = {
         "tool dirs carry the overlay tools": "overlays/qwalo/tools" in rendered,
-        "engine url reaches the sandbox with its host": scoped("QWALO_ENGINE_URL", "qwalo.raava.dev"),
+        "engine url reaches the sandbox with its host": scoped(
+            "QWALO_ENGINE_URL", "qwalo.raava.dev"
+        ),
         "engine scope reaches the sandbox": scoped("QWALO_ACCOUNT_SCOPE", '\\"ere\\"'),
         "one host per client": 'host: "ere.qwalo.raava.dev"' in rendered,
         "system prompt is rendered in": prompt_line in rendered,
@@ -588,6 +610,35 @@ def only_the_engine_tool_ships(base: str) -> dict:
 
 
 @case
+def the_sandbox_gets_only_the_overlay_tool_tree(base: str) -> dict:
+    """`subdir: tools` would hand a sandbox telegram, discord and twitter.
+
+    What matters is what the release points the tools-bootstrap container
+    at. The base tree has a working tools/comms/telegram send_message, so
+    mounting it would contradict the no-send claim outright (F3).
+    """
+    template = (DEPLOY_DIR / "values.client.yaml.tmpl").read_text()
+    block = template.split("toolServer:", 1)[1].split("\n\n", 1)[0]
+    subdirs = [
+        line.strip()
+        for line in block.splitlines()
+        if line.strip().startswith("subdir:")
+    ]
+    telegram = REPO_DIR / "tools" / "comms" / "telegram" / "client.py"
+    base_can_send = telegram.exists() and "send_message" in telegram.read_text()
+    return {
+        "ok": (
+            subdirs == ["subdir: overlays/qwalo/tools"]
+            and "extraSources: []" in block
+            and base_can_send
+        ),
+        "tool_server_block": block.strip(),
+        "base_telegram_can_send": base_can_send,
+        "detail": "the base tool tree can message people, so it must not be mounted",
+    }
+
+
+@case
 def deploy_script_rejects_bad_client(base: str) -> dict:
     bad = run_script([str(DEPLOY_DIR / "deploy-client.sh"), "--check", "ERE_Investors"])
     good = run_script([str(DEPLOY_DIR / "deploy-client.sh"), "--check", "ere"])
@@ -598,9 +649,17 @@ def deploy_script_rejects_bad_client(base: str) -> dict:
     }
 
 
-def run_script(argv: list[str]) -> dict:
+PINNED = {"QWALO_IMAGE_TAG": "2026.10.20-d441128", "QWALO_TOOL_REF": "d441128e"}
+
+
+def run_script(argv: list[str], env: dict[str, str] | None = None) -> dict:
     proc = subprocess.run(
-        argv, capture_output=True, text=True, timeout=120, check=False
+        argv,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        env={**os.environ, **PINNED, **(env or {})},
     )
     return {
         "argv": argv,
@@ -620,7 +679,9 @@ def manifest_names_only_this_client_host(base: str) -> dict:
     scopes = manifest["oauth_config"]["scopes"]["bot"]
     return {
         "ok": url == "https://ere.qwalo.raava.dev/api/webhooks/slack"
-        and "chat:write.public" not in scopes,
+        and "chat:write.public" not in scopes
+        and manifest["settings"]["event_subscriptions"]["bot_events"]
+        == ["app_mention"],
         "request_url": url,
         "detail": "one app, one workspace, one host; no shared router, no unprompted posting scope",
     }
@@ -654,12 +715,76 @@ def values_template_has_no_secret_values(base: str) -> dict:
         "ok": not offenders
         and not leaked
         and vault_line in script
-        and len(reads) == 4
-        and all(ref.startswith("op://${VAULT}/") for ref in reads),
+        and len(reads) == 5
+        and all(ref.startswith("op://${VAULT}/") for ref in reads)
+        # the existence check runs over this list, so the engine token's ref is
+        # the proxy's own shape: op://$OP_VAULT/QWALO_ENGINE_TOKEN/credential
+        and "QWALO_ENGINE_TOKEN"
+        in re.search(r"VAULT_ITEMS=\(([^)]*)\)", script).group(1),
         "offenders": offenders,
         "literal_secret_assignments": leaked,
         "op_reads": reads,
     }
+
+
+@case
+def account_scope_cannot_be_overridden(base: str) -> dict:
+    script = (DEPLOY_DIR / "deploy-client.sh").read_text()
+    lines = [line for line in script.splitlines() if line.startswith("ENGINE_SCOPE=")]
+    return {
+        "ok": lines == ['ENGINE_SCOPE="$CLIENT"'],
+        "assignments": lines,
+        "detail": "one assignment, no override: a stale export cannot retarget a client",
+    }
+
+
+@case
+def deploy_requires_pinned_release_identity(base: str) -> dict:
+    script = str(DEPLOY_DIR / "deploy-client.sh")
+    unpinned = run_script(
+        [script, "--check", "ere"], {"QWALO_IMAGE_TAG": "", "QWALO_TOOL_REF": ""}
+    )
+    floating_tag = run_script([script, "--check", "ere"], {"QWALO_IMAGE_TAG": "latest"})
+    moving_ref = run_script([script, "--check", "ere"], {"QWALO_TOOL_REF": "main"})
+    pinned = run_script([script, "--check", "ere"])
+    return {
+        "ok": all(r["exit"] != 0 for r in (unpinned, floating_tag, moving_ref))
+        and pinned["exit"] == 0,
+        "unpinned": unpinned["stderr"].strip(),
+        "floating_tag": floating_tag["stderr"].strip(),
+        "moving_ref": moving_ref["stderr"].strip(),
+    }
+
+
+@case
+def engine_secret_ref_matches_the_proxy_lookup(base: str) -> dict:
+    """iron-proxy resolves op://$OP_VAULT/<SECRET_NAME>/credential, never /password.
+
+    Source: centaur-iron-control registry.rs builds that ref from the
+    placeholder name. A vault item named for prose, or a field named password,
+    never resolves and the release answers 401 forever.
+    """
+    script = (DEPLOY_DIR / "deploy-client.sh").read_text()
+    refs = re.findall(r"op://\$\{VAULT\}/([A-Za-z_{}$]+)/([a-z]+)", script)
+    items = re.search(r"VAULT_ITEMS=\(([^)]*)\)", script)
+    return {
+        "ok": bool(items)
+        and "QWALO_ENGINE_TOKEN" in items.group(1)
+        and {field for _, field in refs} == {"credential"}
+        and "password" not in script,
+        "refs": sorted(set(refs)),
+        "vault_items": items.group(1).split() if items else [],
+    }
+
+
+@case
+def no_double_scheme_url_anywhere(base: str) -> dict:
+    offenders = []
+    for path in sorted(p for p in OVERLAY_DIR.rglob("*") if p.is_file()):
+        text = path.read_text(errors="ignore")
+        if "https://" + "://" in text or "http:" + "//" + "://" in text:
+            offenders.append(str(path.relative_to(OVERLAY_DIR)))
+    return {"ok": not offenders, "offenders": offenders}
 
 
 @case
@@ -681,13 +806,26 @@ def deploy_script_gates_the_apply(base: str) -> dict:
 
 
 @case
+def deploy_script_refuses_a_token_that_sees_other_vaults(base: str) -> dict:
+    """One 1Password service account per client vault, enforced before any read."""
+    script = (DEPLOY_DIR / "deploy-client.sh").read_text()
+    gate = {
+        "lists_vaults": "op vault list" in script,
+        "names_client_vaults": "prod-qwalo-${CLIENT}" in script,
+        "refuses_before_secrets": script.index("op vault list")
+        < script.index("op read"),
+    }
+    return {"ok": all(gate.values()), "checks": gate}
+
+
+@case
 def inert_pieces_are_declared(base: str) -> dict:
     readme = (OVERLAY_DIR / "README.md").read_text().lower()
     return {
         "ok": "persona" in readme
         and "systemprompt" in readme.replace(" ", "")
         and "inert" in readme,
-        "detail": "the overlay must not claim the persona or prompt is live while the chart does not deliver it",
+        "detail": "the overlay must not claim inert pieces are live",
     }
 
 
@@ -731,7 +869,9 @@ def main() -> int:
     skipped = sum(1 for r in results if r.get("skipped"))
     artifact = {
         "suite": "qwalo-overlay-engine-fake-engine",
-        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        # no timestamp, no absolute path, no ephemeral port: two clean runs are
+        # byte-identical, so a diff in the artifact means the behaviour changed
+        "engine_contract_note": "see README.md Engine contract",
         "engine_contract": (
             "src/v1/routes.ts + src/v1/auth.ts in raava-solutions/qwaelo-ai-engine (main f5a81e1); "
             "read routes per the t-0027 contract, which is not merged yet"

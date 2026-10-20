@@ -6,16 +6,12 @@ import argparse
 import json
 from typing import Any
 
-from .client import EngineClient
+from .client import _client
 
 
 def _emit(result: Any) -> int:
     print(json.dumps(result, indent=2, default=str, sort_keys=True))
     return 1 if isinstance(result, dict) and "error" in result else 0
-
-
-def _client() -> EngineClient:
-    return EngineClient()
 
 
 def main(argv: list[str] | None = None) -> int:

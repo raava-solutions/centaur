@@ -1,5 +1,6 @@
 {
   "engine_contract": "src/v1/routes.ts + src/v1/auth.ts in raava-solutions/qwaelo-ai-engine (main f5a81e1); read routes per the t-0027 contract, which is not merged yet",
+  "engine_contract_note": "see README.md Engine contract",
   "fake_engine": {
     "account_scopes": [
       "ere"
@@ -7,9 +8,8 @@
     "bearer": "e2e-read-token",
     "fixtures": "synthetic only"
   },
-  "generated_at": "2026-10-20T16:32:55+00:00",
   "how_it_runs": "uvx --from overlays/qwalo/tools/engine engine <verb>, the same entrypoint the sandbox CLI shim uses",
-  "passed": 26,
+  "passed": 33,
   "results": [
     {
       "case": "leads_are_read",
@@ -295,6 +295,32 @@
       ]
     },
     {
+      "case": "sandbox_shaped_env_sends_no_bearer",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "metrics"
+        ],
+        "exit": 1,
+        "json": {
+          "error": "invalid_token",
+          "http_status": 401,
+          "message": "bearer token required"
+        }
+      },
+      "requests": [
+        {
+          "authorization": null,
+          "method": "GET",
+          "path": "/v1/metrics",
+          "query": {
+            "account_scope": "ere"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
       "case": "placeholder_token_is_never_sent",
       "passed": true,
       "ran": {
@@ -558,7 +584,15 @@
       ]
     },
     {
-      "accepted": "client      : ere\nnamespace   : centaur-ere\nhelm release: centaur-ere\nslack host  : https://ere.qwalo.raava.dev\nengine      : https://qwalo.raava.dev scope=ere (token: iron-proxy inject, vault prod-qwalo-ere)\nvalues      : rendered clean (131 lines, deleted on exit)\nmanifest    : rendered clean, event request_url left empty until the release is live\n",
+      "base_telegram_can_send": true,
+      "case": "the_sandbox_gets_only_the_overlay_tool_tree",
+      "detail": "the base tool tree can message people, so it must not be mounted",
+      "passed": true,
+      "requests": [],
+      "tool_server_block": "enabled: true\n  repo: raava-solutions/centaur\n  ref: \"<<TOOL_REF>>\"\n  subdir: overlays/qwalo/tools\n  extraSources: []"
+    },
+    {
+      "accepted": "tps://ere.qwalo.raava.dev\naccount_scope: ere (no override)\nengine token : iron-proxy inject; op://prod-qwalo-ere/QWALO_ENGINE_TOKEN/credential\nharness auth : codex api_key; op://prod-qwalo-ere/OPENAI_API_KEY/credential\nvault items  : SLACK_BOT_TOKEN SLACK_SIGNING_SECRET SLACKBOT_API_KEY OPENAI_API_KEY QWALO_ENGINE_TOKEN (field credential)\nvalues       : rendered clean (147 lines, deleted on exit)\n",
       "case": "deploy_script_rejects_bad_client",
       "passed": true,
       "rejected": {
@@ -585,11 +619,73 @@
       "literal_secret_assignments": [],
       "offenders": [],
       "op_reads": [
-        "op://${VAULT}/${item}/password",
-        "op://${VAULT}/slack bot token/password",
-        "op://${VAULT}/slack signing secret/password",
-        "op://${VAULT}/slackbot api key/password"
+        "op://${VAULT}/${item}/credential",
+        "op://${VAULT}/SLACK_BOT_TOKEN/credential",
+        "op://${VAULT}/SLACK_SIGNING_SECRET/credential",
+        "op://${VAULT}/SLACKBOT_API_KEY/credential",
+        "op://${VAULT}/OPENAI_API_KEY/credential"
       ],
+      "passed": true,
+      "requests": []
+    },
+    {
+      "assignments": [
+        "ENGINE_SCOPE=\"$CLIENT\""
+      ],
+      "case": "account_scope_cannot_be_overridden",
+      "detail": "one assignment, no override: a stale export cannot retarget a client",
+      "passed": true,
+      "requests": []
+    },
+    {
+      "case": "deploy_requires_pinned_release_identity",
+      "floating_tag": "FATAL: QWALO_IMAGE_TAG must be a pinned tag, not latest",
+      "moving_ref": "FATAL: QWALO_TOOL_REF must be a pinned ref (a tag or a sha), not a moving branch",
+      "passed": true,
+      "requests": [],
+      "unpinned": "FATAL: QWALO_IMAGE_TAG is required; a client release names the build it runs"
+    },
+    {
+      "case": "engine_secret_ref_matches_the_proxy_lookup",
+      "passed": true,
+      "refs": [
+        [
+          "${item}",
+          "credential"
+        ],
+        [
+          "OPENAI_API_KEY",
+          "credential"
+        ],
+        [
+          "QWALO_ENGINE_TOKEN",
+          "credential"
+        ],
+        [
+          "SLACKBOT_API_KEY",
+          "credential"
+        ],
+        [
+          "SLACK_BOT_TOKEN",
+          "credential"
+        ],
+        [
+          "SLACK_SIGNING_SECRET",
+          "credential"
+        ]
+      ],
+      "requests": [],
+      "vault_items": [
+        "SLACK_BOT_TOKEN",
+        "SLACK_SIGNING_SECRET",
+        "SLACKBOT_API_KEY",
+        "OPENAI_API_KEY",
+        "QWALO_ENGINE_TOKEN"
+      ]
+    },
+    {
+      "case": "no_double_scheme_url_anywhere",
+      "offenders": [],
       "passed": true,
       "requests": []
     },
@@ -600,8 +696,18 @@
       "requests": []
     },
     {
+      "case": "deploy_script_refuses_a_token_that_sees_other_vaults",
+      "checks": {
+        "lists_vaults": true,
+        "names_client_vaults": true,
+        "refuses_before_secrets": true
+      },
+      "passed": true,
+      "requests": []
+    },
+    {
       "case": "inert_pieces_are_declared",
-      "detail": "the overlay must not claim the persona or prompt is live while the chart does not deliver it",
+      "detail": "the overlay must not claim inert pieces are live",
       "passed": true,
       "requests": []
     },
@@ -614,5 +720,5 @@
   ],
   "skipped": 0,
   "suite": "qwalo-overlay-engine-fake-engine",
-  "total": 26
+  "total": 33
 }
