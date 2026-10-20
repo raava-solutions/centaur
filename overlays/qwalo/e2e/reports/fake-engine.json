@@ -616,14 +616,14 @@
     },
     {
       "case": "values_template_has_no_secret_values",
+      "exported_proxy_secrets": [],
       "literal_secret_assignments": [],
       "offenders": [],
       "op_reads": [
         "op://${VAULT}/${item}/credential",
         "op://${VAULT}/SLACK_BOT_TOKEN/credential",
         "op://${VAULT}/SLACK_SIGNING_SECRET/credential",
-        "op://${VAULT}/SLACKBOT_API_KEY/credential",
-        "op://${VAULT}/OPENAI_API_KEY/credential"
+        "op://${VAULT}/SLACKBOT_API_KEY/credential"
       ],
       "passed": true,
       "requests": []

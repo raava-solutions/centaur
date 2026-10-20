@@ -115,11 +115,13 @@ not a style choice: `centaur-iron-control`'s `registry.rs` builds the reference 
 | `OPENAI_API_KEY` | credential | the key the codex harness runs on. The owner decides whose key a client's turns are billed to. |
 | `QWALO_ENGINE_TOKEN` | credential | the bearer token from step 4 |
 
-`deploy-client.sh` puts the first four into the `centaur-infra-env` Secret in the
-client's namespace. The last one is never copied anywhere by this script: iron-proxy
-reads `op://$OP_VAULT/QWALO_ENGINE_TOKEN/credential` at request time and stamps the
-bearer on outbound calls to the engine host. No pod gets a copy, and no environment
-variable for it exists in a sandbox.
+`deploy-client.sh` puts the first three into the `centaur-infra-env` Secret in the
+client's namespace. It copies the last two **nowhere**. `OPENAI_API_KEY` and
+`QWALO_ENGINE_TOKEN` are resolved by iron-proxy from `op://$OP_VAULT/<NAME>/credential`
+and stamped in flight, for `api.openai.com` and the engine host respectively
+(`CODEX_API_KEY_FRAGMENT` in `services/api-rs/crates/centaur-iron-proxy/src/fragment.rs`).
+No pod gets a copy of either, and no environment variable for either exists in a
+sandbox. The script only proves the two items exist before it deploys.
 
 Never put any of these in a values file, a commit, a Slack message, or a shell history
 line. They are diffed, screenshotted, and quoted.

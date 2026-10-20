@@ -711,11 +711,18 @@ def values_template_has_no_secret_values(base: str) -> dict:
         )
     ]
     leaked = [line for line in literal_secrets if "op read" not in line]
+    # iron-proxy resolves these two itself, so the script must not hold them
+    proxy_only = [
+        line
+        for line in script.splitlines()
+        if re.match(r"^export (OPENAI_API_KEY|QWALO_ENGINE_TOKEN)=", line.strip())
+    ]
     return {
         "ok": not offenders
         and not leaked
+        and not proxy_only
         and vault_line in script
-        and len(reads) == 5
+        and len(reads) == 4
         and all(ref.startswith("op://${VAULT}/") for ref in reads)
         # the existence check runs over this list, so the engine token's ref is
         # the proxy's own shape: op://$OP_VAULT/QWALO_ENGINE_TOKEN/credential
@@ -723,6 +730,7 @@ def values_template_has_no_secret_values(base: str) -> dict:
         in re.search(r"VAULT_ITEMS=\(([^)]*)\)", script).group(1),
         "offenders": offenders,
         "literal_secret_assignments": leaked,
+        "exported_proxy_secrets": proxy_only,
         "op_reads": reads,
     }
 

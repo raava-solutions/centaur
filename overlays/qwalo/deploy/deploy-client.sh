@@ -23,7 +23,7 @@
 #   op://prod-qwalo-<client>/SLACK_BOT_TOKEN/credential     -> SLACK_BOT_TOKEN
 #   op://prod-qwalo-<client>/SLACK_SIGNING_SECRET/credential -> SLACK_SIGNING_SECRET
 #   op://prod-qwalo-<client>/SLACKBOT_API_KEY/credential     -> SLACKBOT_API_KEY
-#   op://prod-qwalo-<client>/OPENAI_API_KEY/credential       -> OPENAI_API_KEY
+#   op://prod-qwalo-<client>/OPENAI_API_KEY/credential       -> iron-proxy only
 #   op://prod-qwalo-<client>/QWALO_ENGINE_TOKEN/credential   -> iron-proxy only
 #
 # The last one is never copied by this script into a Kubernetes Secret. iron-proxy
@@ -187,10 +187,12 @@ done
 export SLACK_BOT_TOKEN="$(op read "op://${VAULT}/SLACK_BOT_TOKEN/credential")"
 export SLACK_SIGNING_SECRET="$(op read "op://${VAULT}/SLACK_SIGNING_SECRET/credential")"
 export SLACKBOT_API_KEY="$(op read "op://${VAULT}/SLACKBOT_API_KEY/credential")"
-export OPENAI_API_KEY="$(op read "op://${VAULT}/OPENAI_API_KEY/credential")"
-# iron-proxy resolves the engine bearer from this vault. The sandbox never sees it.
+# iron-proxy resolves OPENAI_API_KEY and QWALO_ENGINE_TOKEN itself, from the vault
+# named by OP_VAULT, and stamps them in flight. Neither is exported here: an export
+# would put a credential in this process for no consumer, and the chart reads model
+# auth from iron-proxy, not from centaur-infra-env.
 export OP_VAULT="$VAULT"
-trap 'unset SLACK_BOT_TOKEN SLACK_SIGNING_SECRET SLACKBOT_API_KEY OPENAI_API_KEY; rm -rf "$WORK"' EXIT
+trap 'unset SLACK_BOT_TOKEN SLACK_SIGNING_SECRET SLACKBOT_API_KEY; rm -rf "$WORK"' EXIT
 
 # ---- 3. namespace + infra secret ------------------------------------------------
 # bootstrap-k8s-secrets.sh owns centaur-infra-env (the Secret the chart reads with
