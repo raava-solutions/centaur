@@ -7,9 +7,9 @@
     "bearer": "e2e-read-token",
     "fixtures": "synthetic only"
   },
-  "generated_at": "2026-10-20T16:22:39+00:00",
+  "generated_at": "2026-10-20T16:32:55+00:00",
   "how_it_runs": "uvx --from overlays/qwalo/tools/engine engine <verb>, the same entrypoint the sandbox CLI shim uses",
-  "passed": 25,
+  "passed": 26,
   "results": [
     {
       "case": "leads_are_read",
@@ -536,6 +536,20 @@
       ]
     },
     {
+      "assertions": {
+        "engine scope reaches the sandbox": true,
+        "engine url reaches the sandbox with its host": true,
+        "no literal slack secret": true,
+        "one host per client": true,
+        "system prompt is rendered in": true,
+        "tool dirs carry the overlay tools": true
+      },
+      "case": "values_template_renders_in_the_real_chart",
+      "passed": true,
+      "requests": [],
+      "resources": 18
+    },
+    {
       "case": "only_the_engine_tool_ships",
       "passed": true,
       "requests": [],
@@ -598,6 +612,7 @@
       "requests": []
     }
   ],
+  "skipped": 0,
   "suite": "qwalo-overlay-engine-fake-engine",
-  "total": 25
+  "total": 26
 }

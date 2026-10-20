@@ -23,7 +23,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
+import tempfile
 import threading
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -476,9 +478,6 @@ def no_write_request_reaches_the_engine(base: str) -> dict:
 @case
 def mutation_proves_the_placeholder_guard_bites(base: str) -> dict:
     """Delete the guard and the leak must appear, or the suite is watching nothing."""
-    import shutil
-    import tempfile
-
     with tempfile.TemporaryDirectory() as tmp:
         copy = Path(tmp) / "engine"
         shutil.copytree(TOOL_DIR, copy)
@@ -500,6 +499,81 @@ def mutation_proves_the_placeholder_guard_bites(base: str) -> dict:
         "ok": leaked == [f"Bearer {PLACEHOLDER}"] and PLACEHOLDER != GOOD_TOKEN,
         "mutated_tool_sent": leaked,
         "detail": "the placeholder reaches the wire only when the guard is removed",
+    }
+
+
+@case
+def values_template_renders_in_the_real_chart(base: str) -> dict:
+    """The values template must survive the real chart, not just a string grep."""
+    if not shutil.which("helm"):
+        return {
+            "ok": True,
+            "skipped": True,
+            "detail": "helm is not installed here; run this suite where it is",
+        }
+    repo = OVERLAY_DIR.parents[1]
+    with tempfile.TemporaryDirectory() as tmp:
+        values = Path(tmp) / "values.ere.yaml"
+        text = (DEPLOY_DIR / "values.client.yaml.tmpl").read_text()
+        for token, value in {
+            "<<CLIENT>>": "ere",
+            "<<NAMESPACE>>": "centaur-ere",
+            "<<HOST>>": "ere.qwalo.raava.dev",
+            "<<ENGINE_URL>>": "https://qwalo.raava.dev",
+            "<<ENGINE_SCOPE>>": "ere",
+            "<<REGISTRY>>": "",
+            "<<TAG>>": "latest",
+            "<<TOOL_REF>>": "main",
+        }.items():
+            text = text.replace(token, value)
+        values.write_text(text)
+        proc = subprocess.run(
+            [
+                "helm",
+                "template",
+                "centaur-ere",
+                str(repo / "contrib" / "chart"),
+                "-f",
+                str(repo / "contrib" / "chart" / "values.yaml"),
+                "-f",
+                str(values),
+                "--set-file",
+                f"overlay.systemPrompt={OVERLAY_DIR / 'services/sandbox/SYSTEM_PROMPT.md'}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+        if proc.returncode != 0:
+            if "missing in charts/" in proc.stderr:
+                return {
+                    "ok": True,
+                    "skipped": True,
+                    "detail": "chart dependencies absent; run: helm dependency build contrib/chart",
+                }
+            return {"ok": False, "detail": proc.stderr[-600:]}
+        rendered = proc.stdout
+    prompt_line = (
+        (OVERLAY_DIR / "services/sandbox/SYSTEM_PROMPT.md").read_text().splitlines()[0]
+    )
+    def scoped(line_text: str, value: str) -> bool:
+        lines = [line for line in rendered.splitlines() if line_text in line]
+        return bool(lines) and all(value in line for line in lines)
+
+    want = {
+        "tool dirs carry the overlay tools": "overlays/qwalo/tools" in rendered,
+        "engine url reaches the sandbox with its host": scoped("QWALO_ENGINE_URL", "qwalo.raava.dev"),
+        "engine scope reaches the sandbox": scoped("QWALO_ACCOUNT_SCOPE", '\\"ere\\"'),
+        "one host per client": 'host: "ere.qwalo.raava.dev"' in rendered,
+        "system prompt is rendered in": prompt_line in rendered,
+        "no literal slack secret": "SLACK_BOT_TOKEN"
+        not in rendered.split("secretKeyRef")[0],
+    }
+    return {
+        "ok": all(want.values()),
+        "assertions": want,
+        "resources": rendered.count("\nkind:"),
     }
 
 
@@ -654,6 +728,7 @@ def main() -> int:
 
     server.shutdown()
     passed = sum(1 for r in results if r["passed"])
+    skipped = sum(1 for r in results if r.get("skipped"))
     artifact = {
         "suite": "qwalo-overlay-engine-fake-engine",
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -671,6 +746,7 @@ def main() -> int:
             "fixtures": "synthetic only",
         },
         "passed": passed,
+        "skipped": skipped,
         "total": len(results),
         "results": results,
     }
