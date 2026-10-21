@@ -993,29 +993,6 @@ def values_template_names_the_webhook_source_namespace(base: str) -> dict:
 
 
 @case
-def prompt_keeps_people_out_of_the_record(base: str) -> dict:
-    """The sandbox prompt today is stricter than the owner's decision, on purpose.
-
-    On 2026-10-21 the owner allowed a client's reviewers to see that client's seller
-    text. The prompt still asks for counts, ids, statuses, and reasons. It stays that
-    way until the owners settle the overlay and the persona, so this case proves the
-    current posture and nothing more: it is not evidence that the decision is
-    implemented, and relaxing it is a design change that has not been authorised.
-
-    What motivated it is still true and still enforced by the platform's shape: the
-    control plane writes session_messages and session_events with no redaction knob,
-    so whatever the agent puts in the record stays there.
-    """
-    prompt = (OVERLAY_DIR / "services" / "sandbox" / "SYSTEM_PROMPT.md").read_text().lower()
-    checks = {
-        "says_the_record_is_stored": "stored" in prompt and "database" in prompt,
-        "forbids_pasting_contact_data": "do not paste" in prompt and "email" in prompt,
-        "names_the_substitute": "id" in prompt and "counts" in prompt,
-    }
-    return {"ok": all(checks.values()), "checks": checks}
-
-
-@case
 def page_size_cannot_crash_the_tool(base: str) -> dict:
     """`_clamped` is total, because the generic tool-call path has no argument types.
 

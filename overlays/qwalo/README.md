@@ -19,6 +19,25 @@ a seller, write a verdict or a label, or see another client. The controls are in
 and topology, not in the prompt — [`FAILURE_MODES.md`](FAILURE_MODES.md) is the ledger,
 and `e2e/run_fake_engine.py` proves most of it.
 
+One naming fact up front, because it surprises everyone: the Kubernetes **namespace**
+is per client (`centaur-ere`) and the **Helm release name is not** — it is `centaur` in
+every namespace. Release names are namespace-scoped, so isolation does not need a
+different name, and `centaur-infra-env` bakes the database host as
+`centaur-centaur-postgres`. FAILURE_MODES F9.
+
+## Decisions for the first client
+
+Taken by the owner on 2026-10-20, recorded so nothing in this overlay re-decides them:
+
+| Decision | Value |
+|---|---|
+| Client slug and namespace | `ere`, `centaur-ere` |
+| Host | `ere.qwalo.raava.dev` |
+| 1Password vault | `prod-qwalo-ere`, exists, empty until the engine issues a token |
+| Seller text | May be shown to that client's reviewers, in that client's Slack and Centaur release only. Never across clients, never into a trace sink (F7, F12) |
+| Seller text and Postgres | Open question for the owners, not decided here: persist, or in-turn only. Today the control plane stores `session_messages` and `session_events` with no redaction knob, so whatever is shown is also stored |
+| Service account `sa-prod-qwalo-ere` | A human creates it in the 1Password web UI; no script and no agent creates it |
+
 ## Layout
 
 | Path | What it is |
@@ -28,10 +47,14 @@ and `e2e/run_fake_engine.py` proves most of it.
 | `tools/personas/qwalo/` | Persona id and prompt: read-only qualification reporter |
 | `services/sandbox/SYSTEM_PROMPT.md` | Overlay sandbox prompt (`overlay.systemPrompt`) |
 | `deploy/values.client.yaml.tmpl` | Per-client values; placeholders only, never secrets |
-| `deploy/deploy-client.sh` | `--check` renders and validates; `--manifest` prints the Slack app manifest; bare run deploys one client |
+| `deploy/deploy-client.sh` | `--check` renders and validates; `--values` writes the values a deploy applies; `--manifest` writes the Slack app manifest; `--vault-scope` runs the 1Password scope gate alone; bare run deploys one client |
 | `deploy/slack-app-manifest.json.tmpl` | Slack app manifest, one app per client workspace |
 | `deploy/RELEASE.md` | ERE end to end, including the steps only a human may take |
-| `e2e/run_fake_engine.py` | The E2E gate: the tool against a fake engine, artifact recorded |
+| `e2e/run_fake_engine.py` | The E2E gate: the tool against a fake engine, the real chart render, artifact recorded |
+| `e2e/run-on-proxmox.sh` | Runs that gate on the lab guest and commits the artifact and the rendered release back here |
+| `e2e/reports/fake-engine.json` | Committed artifact of a green run |
+| `e2e/reports/client-release.rendered.yaml` | The 18 resources `helm template` produces for `ere`, from the shipping script's own values |
+| `workflows/` | Empty on purpose: the directory a client release points `WORKFLOW_DIRS` at (FAILURE_MODES F10) |
 | `Dockerfile` | Overlay image (`COPY . /overlay`), the same shape as the raava overlay |
 
 ## Engine contract
@@ -88,6 +111,12 @@ Engine-side traces (t-0025) belong to the engine; nothing here is needed for the
 Langfuse becomes a standing requirement, the change is four values entries and one
 NetworkPolicy flag — not an overlay hook.
 
+That is exactly why it is gated: [`FAILURE_MODES.md`](FAILURE_MODES.md) F12 records that
+those four entries would stream every prompt and tool result, seller text included, to
+another tenant's UI. A Qwalo release configures no endpoint and no OTLP egress today, and
+enabling one for a client is an owner decision about that client's data, not an
+integration task.
+
 ## Inert today — read before claiming a deploy works
 
 Inherited from the Rust control plane and recorded with source evidence in
@@ -129,12 +158,22 @@ python3 overlays/qwalo/e2e/run_fake_engine.py
 
 Runs the `engine` CLI through `uvx --from overlays/qwalo/tools/engine` against a fake
 engine that speaks the real auth and error contract, and writes
-`e2e/reports/fake-engine.json`. Nothing is deployed and no credential is read. The
-artifact is committed; a green run should change it.
+`e2e/reports/fake-engine.json`. Nothing is deployed and no credential is read.
 
-The suite is deterministic: no timestamp, no absolute path, no ephemeral port in the
-artifact, so two clean runs produce the same bytes and a diff means behaviour moved.
-One case runs `helm template` with the rendered client values against the real chart
-and asserts six facts about the output, including that the tool tree the sandboxes get
-is `overlays/qwalo/tools` and not the base `tools/` tree, which ships a working
-`tools/comms/telegram` `send_message`.
+```bash
+overlays/qwalo/e2e/run-on-proxmox.sh              # default: engineer@centaur-k3s
+```
+
+The committed artifact is produced on the Proxmox lab guest, not on a laptop: the
+runner syncs the overlay, the chart, and one base tool, runs the suite, renders the
+release with `helm template`, and copies both back. `client-release.rendered.yaml` is
+that render, committed, so a reviewer can read what the release actually is: the
+Postgres Service the baked DSN names, `TOOL_DIRS` narrowed to the overlay tree, one
+host, `CODEX_AUTH_MODE=api_key`, the admitted webhook namespace, and no secret material.
+
+The suite is deterministic in the strong sense: no timestamp, no machine path, no
+ephemeral port, no errno string. A run on macOS and a run on the Linux guest produce
+the same bytes today, and a diff means behaviour moved rather than the host changed.
+Where a case cannot observe behaviour it says so: the webhook delivery, the read-back
+of `WORKFLOW_DIRS` from a running container, and the read-only token all need a cluster
+or a Slack app, and `RELEASE.md` is where a human proves them.

@@ -130,7 +130,7 @@ tells the owner the queue is empty.
 **Test.** `missing_engine_url_fails_closed`, `missing_account_scope_fails_closed`,
 `sandbox_shaped_env_sends_no_bearer`, `placeholder_token_is_never_sent`,
 `invalid_token_is_reported`, `engine_503_is_reported`, `engine_404_is_reported`,
-`engine_unreachable_is_reported`.
+`engine_unreachable_is_reported`, `page_size_cannot_crash_the_tool`.
 
 ## F5 — Slack events arrive before the release is ready
 
@@ -162,7 +162,9 @@ a half-configured stack. Slack drops the app after repeated failures.
 
 **Test.** `manifest_names_only_this_client_host` (including `bot_events == ["app_mention"]`),
 `values_template_has_no_secret_values`, `deploy_script_rejects_bad_client`,
-`deploy_script_gates_the_apply`, `no_double_scheme_url_anywhere`.
+`deploy_script_gates_the_apply`, `deploy_requires_pinned_release_identity`,
+`manifest_mode_writes_the_file_it_promises`, `check_reports_the_deploy_facts`,
+`no_double_scheme_url_anywhere`.
 
 ## F6 — secrets in values files
 
@@ -206,8 +208,9 @@ forever. Also: the same secret leaking from client A's values file into client B
 Not on the required list; it is the reason the read-only rule exists.
 
 **Damage.** Seller phone numbers and message text from client A appear in another
-tenant's logs, in a Slack message, or in a prompt for a model the client never
-approved.
+client's Slack, another client's database, a shared log, or a prompt for a model the
+client never approved. Note what is *not* the damage any more: showing a client's own
+seller text to that client's reviewers is the product (F7 control 5).
 
 **Controls.**
 
@@ -219,12 +222,40 @@ approved.
    one workspace, one namespace per client.
 4. The E2E fixtures are synthetic ids with no contact data, so the repo, its tests,
    and the committed artifact cannot become where a client's leads leak.
-5. Open question for the owner, recorded here, not decided in code: whether lead text
-   may be retained in Centaur's Postgres for a client release. The base platform
-   stores transcripts and execution events. `RELEASE.md` flags it as a human decision
-   before go-live.
+5. Decided by the owner on 2026-10-21, replacing the 2026-10-20 rule for this client's
+   own release: **a reviewer may see the seller's text messages.** A reviewer cannot
+   judge what they are approving from a count, so the message text is in scope for the
+   client's own release.
+   - **In scope:** this client's Slack workspace, and this client's Centaur release.
+     One app, one workspace, one namespace, one `account_scope` — F1, F3 and F5 are
+     what keep that true.
+   - **Not in scope:** any other client, any shared surface, and any third-party trace
+     sink. See F12 for why a tracing endpoint is the easiest way to break this quietly.
+   - **Open question, for the owners, not decided here:** does seller text *persist* in
+     Centaur's Postgres, or live only inside the turn that read it? The facts the answer
+     has to fit: the Rust control plane writes `session_messages` and `session_events`
+     with no redaction or retention knob, so today anything the agent shows is also
+     stored, and nothing in an overlay can make it otherwise. If the answer is "in-turn
+     only", that is a platform ask, not an overlay setting.
+      - **Nothing in this overlay decides what the agent may show.** The sandbox prompt
+     carries no rule about seller text, and none is being added while the owners settle
+     the overlay and the persona: which words a reviewer may see is their call, not a
+     runbook's. No E2E case here claims to prove a posture.
+   - The platform fact any answer has to survive: the Rust control plane writes
+     `session_messages` and `session_events` in plain text with no redaction or
+     retention knob, so anything shown in a turn is also stored, and no overlay setting
+     changes that.
+6. Nothing may pull conversation text in from outside the turn uninvited. The base
+   repo's workflow tree ships `slack_backfill.py` and `slack_sync.py`, which call
+   `upsert_messages` and backfill a whole channel's history into Postgres. Whether or
+   not seller text may be *shown*, an unattended backfill of every conversation is a
+   different act from answering a question, and a client release does not register it.
+   See F10.
 
-**Test.** `fixtures_carry_no_real_contact_data`.
+**Test.** `fixtures_carry_no_real_contact_data` (the repo and its artifact carry none),
+F10 for the ingest path, F12 for the export path. Showing seller text inside one client
+is a product decision rather than a control, and whether it persists in Postgres is an
+open owner question; no case here claims to prove either.
 
 ## F8 — the release is inert and green anyway
 
@@ -245,3 +276,124 @@ convenience: `toolServer.subdir: overlays/qwalo/tools` is what keeps the base
 
 **Test.** `inert_pieces_are_declared` — the runner fails if README.md stops naming the
 inert pieces, so the caveat cannot rot into a lie.
+
+## F9 — the client release boots with no database
+
+**Damage.** Every sandbox in the namespace fails its first tool call, and the API
+restarts in a loop, because the connection string names a host that was never created.
+
+**Why it is real.** `contrib/scripts/bootstrap-k8s-secrets.sh:183` writes
+`DATABASE_URL=postgresql://tempo:…@centaur-centaur-postgres:5432/ai_v2` into
+`centaur-infra-env`. That host is `<release>-<chart>-postgres`, and it is baked at
+bootstrap time, not resolved at deploy time. Naming the Helm release after the client
+— the obvious thing to do for a per-client release — produces
+`centaur-ere-centaur-postgres`, and nothing creates it.
+
+**Controls.** `RELEASE="centaur"` in `deploy-client.sh`, in every namespace. Isolation
+comes from the namespace, which is what a Helm release name is scoped to anyway. The
+name is therefore load-bearing and cannot be chosen per client, and the E2E case reads
+the baked host out of the bootstrap script and derives it from the release name the
+script reports, so a rename fails the suite rather than the client.
+
+`RELEASE.md` step 7 proves it on the real cluster: the decoded `DATABASE_URL` host and
+`kubectl get svc` must agree.
+
+**Test.** `release_name_keeps_the_database_host`, and the postgres-service assertion in
+`values_template_renders_in_the_real_chart`.
+
+## F10 — a client release registers the base workflow tree
+
+**Damage.** A workflow nobody in this deployment asked for runs on a schedule and
+writes a client's channel history into Postgres, while the owners are still deciding
+whether seller text should persist at all. Nothing fails, no pod restarts, and the
+retention is invisible until someone asks for it back.
+
+**Why it is real.** `contrib/chart/templates/apirs.yaml:12` builds `WORKFLOW_DIRS` as
+`<repoCache.hostPath>/<toolServer.repo>/workflows` with no subdirectory knob, so
+`toolServer.subdir` narrows the tool tree and leaves the workflow tree alone. The base
+tree holds eleven server-side workflows, including `slack_backfill.py` and
+`slack_sync.py`, both of which call `upsert_messages`. `google_calendar_sync`,
+`linear_sync`, `github_issue_triage` and `google_drive_sync` would register against
+secrets a client vault does not hold, and read as broken integrations rather than
+missing grants.
+
+**Controls.**
+
+1. `apiRs.extraEnv.WORKFLOW_DIRS` points at `overlays/qwalo/workflows`, an empty
+   directory kept in the repo for exactly that purpose. `apirs.yaml` emits `extraEnv`
+   after every built-in, and a container takes the last definition of a name, so the
+   base path is hidden and the release registers zero workflows.
+2. Hiding is a runtime property of the kubelet, not of the manifest, so `RELEASE.md`
+   step 7 reads `WORKFLOW_DIRS` back out of the running container. One base path in
+   that output is a live leak: stop traffic to the release.
+3. A client workflow is added by putting one file in `overlays/qwalo/workflows`, which
+   keeps the tenant boundary in the file layout instead of in a schedule.
+
+**Test.** `values_template_renders_in_the_real_chart` asserts both entries are present,
+in order, with the overlay path last, and records `workflow_dirs_seen` in the artifact.
+
+## F11 — the release is Ready, healthy, and deaf
+
+**Damage.** Slack posts events to the client's host and gets nothing back. Pods are
+`Ready`, the Ingress exists, the rollout succeeded, and the only symptom is a bot that
+never answers. Slack retries, then marks the request URL failing.
+
+**Why it is real.** The chart is deny-by-default (`contrib/chart/templates/networkpolicy.yaml`)
+and admits inbound webhook traffic only from `networkPolicy.ingressControllerNamespaces`,
+whose chart default is `[kube-system]` (`contrib/chart/values.yaml:331`). Whatever
+terminates TLS for `<client>.qwalo.raava.dev` may live in another namespace, and the
+values template that forgets to say so still installs cleanly.
+
+**Controls.**
+
+1. The values template names `networkPolicy.ingressControllerNamespaces` explicitly, so
+   the assumption is a line a reviewer reads rather than a chart default nobody chose.
+2. `RELEASE.md` step 1 makes naming that namespace part of creating the network path,
+   before any event is sent, and requires one real Slack event plus a log check before
+   the release is trusted.
+3. Public reach is a Cloudflare Tunnel, never Tailscale Funnel.
+
+**Test.** `values_template_names_the_webhook_source_namespace`, and the admitted-namespace
+assertion in `values_template_renders_in_the_real_chart`. The end to end fact — an event
+delivered through the real tunnel — cannot be proven without a cluster and a Slack app,
+and `RELEASE.md` step 1 is where a human proves it.
+
+## F12 — seller text is exported to a trace sink
+
+**Damage.** Every prompt, tool result, and harness turn from a client's release is
+streamed to a third-party observability product, in clear text, under a different
+tenant's account. Nothing in the release looks different. The client's seller
+conversations are now a search box in someone else's UI, and it is the one exfiltration
+path that survives every other control in this file, because it is switched on with four
+values entries and one NetworkPolicy flag.
+
+**Why it is real.** The platform already has the pipe. `SANDBOX_OTLP_PASSTHROUGH_ENV_KEYS`
+(`services/api-rs/crates/centaur-api-server/src/args.rs`) forwards
+`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`,
+`OTEL_EXPORTER_OTLP_HEADERS`, and `OTEL_RESOURCE_ATTRIBUTES` from api-rs into every
+sandbox, and `services/sandbox/codex-app-wrapper.py` writes them into codex's
+`[otel] trace_exporter` block. Langfuse ingests OTLP at `/api/public/otel/v1/traces`.
+So `apiRs.extraEnv` plus `networkPolicy.otlpEgress.enabled = true` is a working
+Langfuse integration, with no code anywhere and no test failing.
+
+**Controls.**
+
+1. A Qwalo release ships no tracing endpoint. The values template sets no `OTEL_*` key,
+   and `networkPolicy.otlpEgress.enabled` stays at its chart default of `false`, so
+   there is no destination and no route to one. The committed render contains no
+   `OTEL` line at all, which is what the assertion in
+   `values_template_renders_in_the_real_chart` checks.
+2. `README.md` documents the plug-in point rather than pretending it does not exist.
+   The reason it is written down is that a future integrator must find it and find this
+   row, not discover it by turning it on inside a client's release.
+3. If tracing is ever wanted for a client, it goes to a collector inside that client's
+   own boundary, named in that client's values file, with the client's approval — spans
+   carry prompts and tool output, which is the seller's text.
+
+**Open, for the owners:** tracing and the seller-text decision point the same direction.
+A trace sink is also the fastest way to answer "does it persist?" in the worst available
+way. `RELEASE.md` step 10 lists this as not-configured, not as forbidden-forever.
+
+**Test.** `values_template_renders_in_the_real_chart` (no `OTEL_*` in the rendered
+release). The negative is the whole proof; there is nothing to observe at runtime
+because nothing is configured.

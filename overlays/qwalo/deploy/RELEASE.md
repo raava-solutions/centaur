@@ -24,6 +24,30 @@ client workspace (Slack app)  ->  https://<client>.qwalo.raava.dev  ->  namespac
 No Marketplace. No shared router. No SmarterContact credential in this release: the
 engine reads SmarterContact through sc-connector, and the agent reads the engine.
 
+## Decisions taken (2026-10-20, zay)
+
+- Client slug `ere`; host `ere.qwalo.raava.dev`; vault `prod-qwalo-ere` exists and is
+  empty (id `ylon56czut2scrqjb22rveszte`).
+- Seller text may be shown to that client's reviewers. A reviewer cannot judge what
+  they are approving from a count, so on 2026-10-21 the owner allowed the seller's text
+  messages inside **this client's** Slack workspace and **this client's** Centaur
+  release. That replaces the 2026-10-20 rule for this release.
+  - It stays inside the client: one app, one workspace, one namespace, one
+    `account_scope` (F1, F3, F11), and never into a shared surface or a third-party
+    trace sink (F12).
+  - Open question for the owners, not decided in this document and not decided by an
+    agent: does seller text **persist** in Centaur's Postgres, or live only in the turn
+    that read it? Today it persists — the control plane writes `session_messages` and
+    `session_events` with no redaction or retention knob — and no overlay setting
+    changes that. If the answer is "in-turn only", that is a platform ask.
+  - The sandbox prompt says nothing about seller text, and nothing in this overlay
+    decides what the agent may show. That belongs to the overlay and persona pass the
+    owners are running. Do not settle it from a runbook.
+- Still a human step, and it stays one: the `sa-prod-qwalo-ere` service account is
+  created in the 1Password web UI. Neither this script nor an agent creates it.
+- No vault item is created until the engine issues ERE's read token. An empty vault is
+  the correct state today: `deploy-client.sh` fails against it, and it should.
+
 ## Step 0 — what only a human may do
 
 You need, and this release does not create or assume:
@@ -98,9 +122,9 @@ deploy cannot receive mentions and cannot half-work.
 
 ## Step 3 — store the app's secrets in 1Password
 
-Create vault `prod-qwalo-ere` (or ask the vault owner to), with one item per row, each
-with a `password` field. The names are exact: `deploy-client.sh` refuses to deploy when
-one of them cannot be read.
+Create vault `prod-qwalo-ere` (or ask the vault owner to), with one item per row.
+The names are exact: `deploy-client.sh` refuses to deploy when one of them cannot be
+read.
 
 The item name is the secret name and the field is `credential`, in every row. That is
 not a style choice: `centaur-iron-control`'s `registry.rs` builds the reference as
@@ -142,7 +166,8 @@ printf '%s' "$TOKEN" | openssl dgst -sha256      # register the hex digest, keep
 
 Add a slot with `"account_scopes": ["ere"]` and rotate the Worker secret
 (`npx wrangler secret put SERVICE_TOKENS`). Keep at least two slots so the next rotation
-has no downtime. Store the plaintext in `prod-qwalo-ere/engine v1 token`.
+has no downtime. Store the plaintext in vault item `prod-qwalo-ere/QWALO_ENGINE_TOKEN`,
+field `credential` — the name iron-proxy looks up, not a description of the item.
 
 Understand what this token is and is not:
 
@@ -228,10 +253,37 @@ then leave it `false` in every client release. Two controllers fight over the sa
 ## Step 7 — verify before anyone asks the bot a question
 
 ```bash
-kubectl -n centaur-ere rollout status deploy/centaur-ere-centaur-api-rs \
-                                  deploy/centaur-ere-centaur-slackbotv2
+kubectl -n centaur-ere rollout status deploy/centaur-centaur-api-rs \
+                                  deploy/centaur-centaur-slackbotv2
 kubectl -n centaur-ere get secret centaur-infra-env -o 'jsonpath={.data}' | tr ',' '\n'   # key names only, never values
 ```
+
+Two probes check that this release is the release the overlay means, because both are
+properties a green rollout does not prove:
+
+```bash
+# 1. The database host the Secret names must be a Service that exists in this namespace.
+#    The Secret is built by contrib/scripts/bootstrap-k8s-secrets.sh with the host baked
+#    in, and it assumes the Helm release is named `centaur`.
+kubectl -n centaur-ere get secret centaur-infra-env -o 'jsonpath={.data.DATABASE_URL}' \
+  | base64 -d | sed 's|://[^@]*@|://<user:pass>@|'
+kubectl -n centaur-ere get svc centaur-centaur-postgres -o name
+
+# 2. The registered workflow set. The chart always emits the base tree first and this
+#    release hides it with a later entry; hiding is a runtime behaviour, so read it
+#    back from the container rather than trusting the render.
+kubectl -n centaur-ere exec deploy/centaur-centaur-api-rs -- printenv WORKFLOW_DIRS
+```
+
+Expected: the first prints a host of `centaur-centaur-postgres`, and the second finds
+that Service. If they disagree, the API has no database and every sandbox in the
+namespace will fail its first tool call.
+
+The third prints one path, ending `overlays/qwalo/workflows`. If it names the base
+repo's `workflows` directory, the client release has registered the base tree: that
+tree contains `slack_backfill` and `slack_sync`, which write Slack conversation text
+into Postgres. Treat that as a live leak of exactly what must not be stored, stop
+traffic to the release, and find out why the override stopped winning.
 
 Now prove the token works **from a sandbox**, which is the only place iron-proxy is in
 the path. Exec into a running sandbox pod and run the tool as the agent runs it:
@@ -271,7 +323,7 @@ a UX nit.
 
 ## Step 9 — after go-live
 
-- Watch `kubectl -n centaur-ere logs deploy/centaur-ere-centaur-slackbotv2` for the
+- Watch `kubectl -n centaur-ere logs deploy/centaur-centaur-slackbotv2` for the
   first day. A stale `centaur-infra-env` Slack secret is the known cause of a silent
   outage: the Slackbot stays `Running` while Slack answers `401 invalid_auth`.
 - A leaked engine token is an incident, not a rotation: the holder can write labels for
@@ -296,11 +348,25 @@ Ship this overlay knowing these are open. They are listed in `README.md` and
    control plane, and nothing writes `AGENTS_BASE.md`. The agent runs base instructions.
 3. **The overlay system prompt does not reach a sandbox.** It is rendered into a
    ConfigMap mounted on api-rs only.
-4. **Overlay workflows are not discovered.** Qwalo ships none.
+4. **A client release registers zero workflows, by hiding the base tree.** The chart has
+   no workflow subdirectory knob, so `apiRs.extraEnv.WORKFLOW_DIRS` points at the empty
+   `overlays/qwalo/workflows`. Hiding is a runtime behaviour, so step 7 reads the value
+   back from the container. FAILURE_MODES F10.
 5. **The engine token is not verb-scoped, and that is Gate B.** Step 4 explains the
    exposure, including that iron-proxy injects on any method to the engine host.
-6. **A human decides whether lead text may live in Centaur's Postgres.** The base
-   platform persists transcripts and execution events. Answer it before step 8, not
-   after an owner asks.
+6. **Whether seller text persists in Centaur Postgres is still open with the owners.**
+   Showing it to a client's own reviewers is decided (2026-10-21); storing it is not.
+   Today the control plane persists `session_messages` and `session_events` with no
+   redaction or retention knob, so the answer today is "it persists", and changing that
+   is a platform change, not an overlay setting. Ask before step 8, not after an owner
+   does.
 7. **CI does not cover this overlay.** The E2E gate is
-   `python3 overlays/qwalo/e2e/run_fake_engine.py`; run it before you deploy.
+   `python3 overlays/qwalo/e2e/run_fake_engine.py`, and
+   `overlays/qwalo/e2e/run-on-proxmox.sh` runs it on the lab guest and commits the
+   artifact and the rendered release. Run it before you deploy.
+8. **No tracing is configured, and that is a decision, not an absence of thought.** The
+   platform would forward harness spans to any OTLP endpoint named in `apiRs.extraEnv`,
+   and those spans contain prompts and tool output: the seller's text. A Qwalo release
+   names no endpoint and leaves `networkPolicy.otlpEgress.enabled` false. Turning on
+   Langfuse for a client is an owner decision about that client's data. FAILURE_MODES
+   F12.

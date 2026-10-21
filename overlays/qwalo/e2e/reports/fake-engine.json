@@ -5,11 +5,15 @@
     "account_scopes": [
       "ere"
     ],
-    "bearer": "e2e-read-token",
+    "bearer": "fixture constant GOOD_TOKEN in run_fake_engine.py; synthetic, never a real credential",
     "fixtures": "synthetic only"
   },
   "how_it_runs": "uvx --from overlays/qwalo/tools/engine engine <verb>, the same entrypoint the sandbox CLI shim uses",
-  "passed": 33,
+  "passed": 40,
+  "release_identity": {
+    "image_tag": "2026.10.20-d441128",
+    "tool_ref": "d441128e"
+  },
   "results": [
     {
       "case": "leads_are_read",
@@ -45,7 +49,7 @@
       },
       "requests": [
         {
-          "authorization": "Bearer e2e-read-token",
+          "authorization": "Bearer <fixture-bearer>",
           "method": "GET",
           "path": "/v1/leads",
           "query": {
@@ -73,7 +77,7 @@
       },
       "requests": [
         {
-          "authorization": "Bearer e2e-read-token",
+          "authorization": "Bearer <fixture-bearer>",
           "method": "GET",
           "path": "/v1/leads/sc-synthetic-0001",
           "query": {
@@ -110,7 +114,7 @@
       },
       "requests": [
         {
-          "authorization": "Bearer e2e-read-token",
+          "authorization": "Bearer <fixture-bearer>",
           "method": "GET",
           "path": "/v1/leads/sc-synthetic-0001/verdict",
           "query": {
@@ -142,7 +146,7 @@
       },
       "requests": [
         {
-          "authorization": "Bearer e2e-read-token",
+          "authorization": "Bearer <fixture-bearer>",
           "method": "GET",
           "path": "/v1/review-queue",
           "query": {
@@ -171,7 +175,7 @@
       },
       "requests": [
         {
-          "authorization": "Bearer e2e-read-token",
+          "authorization": "Bearer <fixture-bearer>",
           "method": "GET",
           "path": "/v1/metrics",
           "query": {
@@ -200,7 +204,7 @@
       },
       "requests": [
         {
-          "authorization": "Bearer e2e-read-token",
+          "authorization": "Bearer <fixture-bearer>",
           "method": "GET",
           "path": "/v1/metrics",
           "query": {
@@ -255,7 +259,7 @@
       },
       "requests": [
         {
-          "authorization": "Bearer e2e-read-token",
+          "authorization": "Bearer <fixture-bearer>",
           "method": "GET",
           "path": "/v1/leads",
           "query": {
@@ -283,7 +287,7 @@
       },
       "requests": [
         {
-          "authorization": "Bearer e2e-read-token",
+          "authorization": "Bearer <fixture-bearer>",
           "method": "GET",
           "path": "/v1/leads",
           "query": {
@@ -389,7 +393,7 @@
       },
       "requests": [
         {
-          "authorization": "Bearer e2e-read-token",
+          "authorization": "Bearer <fixture-bearer>",
           "method": "GET",
           "path": "/v1/metrics",
           "query": {
@@ -416,7 +420,7 @@
       },
       "requests": [
         {
-          "authorization": "Bearer e2e-read-token",
+          "authorization": "Bearer <fixture-bearer>",
           "method": "GET",
           "path": "/v1/leads/sc-synthetic-9999/verdict",
           "query": {
@@ -467,7 +471,7 @@
         "exit": 1,
         "json": {
           "error": "engine_unreachable",
-          "message": "cannot reach the engine at http://127.0.0.1:1: [Errno 61] Connection refused"
+          "message": "cannot reach the engine at http://127.0.0.1:1: [Errno <os>] Connection refused"
         }
       },
       "requests": []
@@ -494,7 +498,7 @@
       "passed": true,
       "requests": [
         {
-          "authorization": "Bearer e2e-read-token",
+          "authorization": "Bearer <fixture-bearer>",
           "method": "GET",
           "path": "/v1/leads",
           "query": {
@@ -504,7 +508,7 @@
           "scenario": "ok"
         },
         {
-          "authorization": "Bearer e2e-read-token",
+          "authorization": "Bearer <fixture-bearer>",
           "method": "GET",
           "path": "/v1/leads/sc-synthetic-0001",
           "query": {
@@ -513,7 +517,7 @@
           "scenario": "ok"
         },
         {
-          "authorization": "Bearer e2e-read-token",
+          "authorization": "Bearer <fixture-bearer>",
           "method": "GET",
           "path": "/v1/leads/sc-synthetic-0001/verdict",
           "query": {
@@ -522,7 +526,7 @@
           "scenario": "ok"
         },
         {
-          "authorization": "Bearer e2e-read-token",
+          "authorization": "Bearer <fixture-bearer>",
           "method": "GET",
           "path": "/v1/review-queue",
           "query": {
@@ -532,7 +536,7 @@
           "scenario": "ok"
         },
         {
-          "authorization": "Bearer e2e-read-token",
+          "authorization": "Bearer <fixture-bearer>",
           "method": "GET",
           "path": "/v1/metrics",
           "query": {
@@ -563,12 +567,21 @@
     },
     {
       "assertions": {
+        "base workflow tree is hidden": true,
         "engine scope reaches the sandbox": true,
         "engine url reaches the sandbox with its host": true,
+        "harness auth is api_key": true,
         "no literal slack secret": true,
+        "no trace sink is configured": true,
         "one host per client": true,
+        "postgres service matches the baked host": true,
         "system prompt is rendered in": true,
-        "tool dirs carry the overlay tools": true
+        "tool dirs carry the overlay tools": true,
+        "webhook source namespace is admitted": true,
+        "workflow_dirs_seen": [
+          "/var/lib/centaur/repos/raava-solutions/centaur/workflows",
+          "/var/lib/centaur/repos/raava-solutions/centaur/overlays/qwalo/workflows"
+        ]
       },
       "case": "values_template_renders_in_the_real_chart",
       "passed": true,
@@ -592,12 +605,12 @@
       "tool_server_block": "enabled: true\n  repo: raava-solutions/centaur\n  ref: \"<<TOOL_REF>>\"\n  subdir: overlays/qwalo/tools\n  extraSources: []"
     },
     {
-      "accepted": "tps://ere.qwalo.raava.dev\naccount_scope: ere (no override)\nengine token : iron-proxy inject; op://prod-qwalo-ere/QWALO_ENGINE_TOKEN/credential\nharness auth : codex api_key; op://prod-qwalo-ere/OPENAI_API_KEY/credential\nvault items  : SLACK_BOT_TOKEN SLACK_SIGNING_SECRET SLACKBOT_API_KEY OPENAI_API_KEY QWALO_ENGINE_TOKEN (field credential)\nvalues       : rendered clean (147 lines, deleted on exit)\n",
+      "accepted": "tps://ere.qwalo.raava.dev\naccount_scope: ere (no override)\nengine token : iron-proxy inject; op://prod-qwalo-ere/QWALO_ENGINE_TOKEN/credential\nharness auth : codex api_key; op://prod-qwalo-ere/OPENAI_API_KEY/credential\nvault items  : SLACK_BOT_TOKEN SLACK_SIGNING_SECRET SLACKBOT_API_KEY OPENAI_API_KEY QWALO_ENGINE_TOKEN (field credential)\nvalues       : rendered clean (186 lines, deleted on exit)\n",
       "case": "deploy_script_rejects_bad_client",
       "passed": true,
       "rejected": {
         "argv": [
-          "/Volumes/RTL-Worktrees/herdr/centaur/hp-qwaelo-t-0028-centaur-qwalo-overlay-per-client-deploy/overlays/qwalo/deploy/deploy-client.sh",
+          "overlays/qwalo/deploy/deploy-client.sh",
           "--check",
           "ERE_Investors"
         ],
@@ -643,7 +656,7 @@
       "moving_ref": "FATAL: QWALO_TOOL_REF must be a pinned ref (a tag or a sha), not a moving branch",
       "passed": true,
       "requests": [],
-      "unpinned": "FATAL: QWALO_IMAGE_TAG is required; a client release names the build it runs"
+      "unpinned": "FATAL: QWALO_IMAGE_TAG is empty; the rendered values would name no image"
     },
     {
       "case": "engine_secret_ref_matches_the_proxy_lookup",
@@ -691,19 +704,77 @@
     },
     {
       "case": "deploy_script_gates_the_apply",
-      "detail": "secret refs are proven before apply; the rendered values file is temporary",
+      "detail": "identity, vault scope, and secret existence are all proven before the apply",
+      "order": [
+        "pinned_identity",
+        "vault_scope",
+        "secret_exists",
+        "infra_secret",
+        "apply"
+      ],
       "passed": true,
       "requests": []
     },
     {
-      "case": "deploy_script_refuses_a_token_that_sees_other_vaults",
-      "checks": {
-        "lists_vaults": true,
-        "names_client_vaults": true,
-        "refuses_before_secrets": true
-      },
+      "case": "vault_scope_gate_passes_a_single_vault",
+      "exit": 0,
+      "passed": true,
+      "requests": [],
+      "stderr": "",
+      "stdout": "vault scope : prod-qwalo-ere only"
+    },
+    {
+      "case": "vault_scope_gate_refuses_a_second_vault",
+      "exit": 1,
+      "names_the_other_vault": true,
       "passed": true,
       "requests": []
+    },
+    {
+      "attested_exit": 0,
+      "case": "vault_scope_gate_fails_closed_when_it_cannot_check",
+      "exit": 1,
+      "passed": true,
+      "requests": []
+    },
+    {
+      "case": "manifest_mode_writes_the_file_it_promises",
+      "exit": 0,
+      "file_written": true,
+      "passed": true,
+      "requests": []
+    },
+    {
+      "baked_host": "centaur-centaur-postgres",
+      "case": "release_name_keeps_the_database_host",
+      "derived_host": "centaur-centaur-postgres",
+      "helm_release": "centaur",
+      "passed": true,
+      "requests": []
+    },
+    {
+      "case": "check_reports_the_deploy_facts",
+      "exit": 0,
+      "missing": [],
+      "passed": true,
+      "requests": []
+    },
+    {
+      "admitted_namespaces": [
+        "kube-system"
+      ],
+      "case": "values_template_names_the_webhook_source_namespace",
+      "detail": "the values file states the admitted source namespace explicitly",
+      "passed": true,
+      "requests": []
+    },
+    {
+      "case": "page_size_cannot_crash_the_tool",
+      "exit": 0,
+      "passed": true,
+      "requests": [],
+      "stderr": "",
+      "values": "[1, 50, 100, 1, 1, 1]"
     },
     {
       "case": "inert_pieces_are_declared",
@@ -720,5 +791,5 @@
   ],
   "skipped": 0,
   "suite": "qwalo-overlay-engine-fake-engine",
-  "total": 33
+  "total": 40
 }
