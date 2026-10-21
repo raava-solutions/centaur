@@ -1,0 +1,37 @@
+{
+  "display_information": {
+    "name": "Qwalo <<CLIENT>>",
+    "description": "Qwalo lead-qualification assistant for the <<CLIENT>> workspace.",
+    "background_color": "#1f4d3d"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "Qwalo",
+      "always_online": true
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "chat:write",
+        "channels:history",
+        "channels:read",
+        "groups:history",
+        "groups:read",
+        "users:read"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "request_url": "https://<<HOST>>/api/webhooks/slack",
+      "bot_events": [
+        "app_mention"
+      ]
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}

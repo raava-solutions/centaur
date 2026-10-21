@@ -1,0 +1,190 @@
+# Per-client Centaur release values — Qwalo overlay.
+#
+# Rendered by overlays/qwalo/deploy/deploy-client.sh <client>. Do not hand-edit the
+# rendered copy; it lives in a temp directory and is deleted on exit.
+#
+# NO SECRET BELONGS IN THIS FILE. Slack credentials, the signing secret, the
+# slackbot API key, database URLs, and the model key are read from
+# op://prod-qwalo-<<CLIENT>>/<SECRET_NAME>/credential at apply time and written
+# into the <<NAMESPACE>> Secret centaur-infra-env, which the chart consumes with
+# secretManager.existingSecretName (see deploy/RELEASE.md step 4).
+#
+# Placeholders the script substitutes: <<CLIENT>> <<NAMESPACE>> <<HOST>>
+# <<ENGINE_URL>> <<ENGINE_SCOPE>> <<TAG>> <<TOOL_REF>>
+#
+# <<TAG>> and <<TOOL_REF>> are release identity. The script refuses to deploy or
+# render without both, so a client's runtime never floats to whatever main or
+# latest happens to be at the moment someone runs helm.
+#
+# No registry key: no chart template reads one. apirs.yaml, slackbotv2.yaml and
+# workloads.yaml all build the image name as repository:tag, so a registry field
+# here would be a knob that looks real and does nothing.
+
+x-release: &release
+  tag: "<<TAG>>"
+  pullPolicy: IfNotPresent
+
+# --- Tool delivery: ONLY this overlay's tools reach a sandbox ---------------------
+# toolServer.subdir names the directory the tools-bootstrap init container copies
+# into every sandbox. Pointed at the base `tools` tree it would install all 60+
+# base plugins, including tools/comms/telegram with a working send_message. That
+# would make "this agent cannot message anyone" false. So the source is the
+# overlay's own curated tree, which holds exactly one tool: engine.
+#
+# Consequence to accept deliberately: a Qwalo sandbox has no websearch, no slack,
+# no github. If a client release later needs one, add that tool under
+# overlays/qwalo/tools and review it as an expansion of the agent's capability.
+toolServer:
+  enabled: true
+  repo: raava-solutions/centaur
+  ref: "<<TOOL_REF>>"
+  subdir: overlays/qwalo/tools
+  extraSources: []
+
+# The Qwalo sandbox prompt. The script renders it in with --set-file, never
+# inline, so this file cannot drift from the source. See README.md "Inert today":
+# on the Rust control plane this reaches api-rs only, not a sandbox pod, and the
+# persona prompt is not delivered either.
+overlay:
+  mountPath: /app/overlay/org
+  systemPrompt: ""
+
+# --- Control plane --------------------------------------------------------------
+apiRs:
+  enabled: true
+  image:
+    repository: centaur-api-rs
+    <<: *release
+  # One client per release: a small warm pool is enough for a mention-driven
+  # assistant, and it keeps a cold first turn off the owner's patience.
+  sandboxWarmPoolSize: 1
+  # A client release registers zero workflows.
+  #
+  # The chart builds WORKFLOW_DIRS as <repoCache.hostPath>/<toolServer.repo>/workflows
+  # with no knob, so a client release would register the base tree: eleven server-side
+  # workflows. Two of them, slack_backfill and slack_sync, call upsert_messages and
+  # write channel history into Postgres on a schedule. The owner's decision of
+  # 2026-10-21 is that Centaur stores no lead or seller data: the release reads the
+  # engine when it answers and keeps nothing. A backfill is a writer, so it is not
+  # registered here, whatever a reviewer is allowed to see in Slack. The rest (google_calendar_sync, linear_sync,
+  # github_issue_triage, google_drive_sync) would register against secrets this vault
+  # does not hold and fail like broken integrations.
+  #
+  # This entry is emitted after every built-in, so it hides the base path: a container
+  # takes the last definition of a name. It is a hiding, not a removal, so RELEASE.md
+  # step 7 reads the value back from the running pod. If that probe ever prints the
+  # base path, treat it as a live leak, not a cosmetic diff.
+  #
+  # Path is <repoCache.hostPath>/<toolServer.repo>/overlays/qwalo/workflows. If
+  # repoCache.hostPath is ever changed from its default, this line moves with it.
+  extraEnv:
+    WORKFLOW_DIRS: /var/lib/centaur/repos/raava-solutions/centaur/overlays/qwalo/workflows
+  ironProxy:
+    mode: enabled
+  resources:
+    requests:
+      cpu: 100m
+      memory: 384Mi
+    limits:
+      memory: 1024Mi
+
+slackbotv2:
+  enabled: true
+  image:
+    repository: centaur-slackbotv2
+    <<: *release
+  userName: qwalo-<<CLIENT>>
+  resources:
+    requests:
+      cpu: 25m
+      memory: 96Mi
+    limits:
+      memory: 256Mi
+
+# --- Sandboxes ------------------------------------------------------------------
+sandbox:
+  image:
+    repository: centaur-agent
+    <<: *release
+  harnessEngine: codex
+  # api_key, not access_token. access_token needs OPENAI_CODEX_CLIENT_ID,
+  # OPENAI_CODEX_BLOB and OPENAI_CODEX_ACCOUNT_ID, and a *writable* 1Password
+  # Connect token to refresh the brokered token. A client vault stays
+  # read-only (RELEASE.md step 0), so the harness runs on a plain OpenAI key.
+  # The owner decides which key a client's turns are billed to.
+  codexAuthMode: api_key
+  # The engine tool reads these three in the sandbox. QWALO_ACCOUNT_SCOPE is the
+  # tenant boundary and the script sets it from the client name with no override.
+  # There is deliberately no token here: the engine bearer is an iron-proxy
+  # inject-mode secret (overlays/qwalo/tools/engine/pyproject.toml), so no
+  # environment variable for it exists in a sandbox at all.
+  extraEnv:
+    QWALO_ENGINE_URL: "<<ENGINE_URL>>"
+    QWALO_ACCOUNT_SCOPE: "<<ENGINE_SCOPE>>"
+    # Base URL of the review console. The tool stamps `console_url` onto every lead
+    # answer from it, so a reviewer is sent to the seller's words instead of receiving a
+    # copy of them in Slack (FAILURE_MODES F13). Console links are hash routes to a lead
+    # page today: <base>/#/review?id=<external_id>. Message-level anchors are console
+    # bead qc-sv2, so the answer names the message by position until they land.
+    QWALO_CONSOLE_URL: "<<CONSOLE_URL>>"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+
+# --- Slack edge -----------------------------------------------------------------
+# The manifest's request_url is https://<<HOST>>/api/webhooks/slack. A human sets
+# it only after this release is rolled out and the probes in RELEASE.md step 7
+# passed, and only for this client's own host.
+ingress:
+  enabled: true
+  host: "<<HOST>>"
+
+# --- How the Slack webhook reaches this release ----------------------------------
+# The chart is deny-by-default. slackbotv2 accepts a request only from a namespace
+# named here, and the chart default is kube-system. If the thing that terminates TLS
+# for this host (an ingress controller, or a Cloudflare Tunnel pod) runs in any other
+# namespace, the release deploys clean, the pods are Ready, Slack gets a 500 or a
+# timeout, and nothing in the cluster says why. Confirm the namespace with whoever
+# owns the cluster before the first event, not after.
+# Public endpoints reach a client host through a Cloudflare Tunnel, never Tailscale
+# Funnel.
+networkPolicy:
+  ingressControllerNamespaces:
+    - kube-system
+
+# --- State: one database, one namespace, one client ------------------------------
+postgres:
+  image:
+    pullPolicy: IfNotPresent
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClassName: local-path
+  resources:
+    requests:
+      cpu: 100m
+      memory: 384Mi
+    limits:
+      memory: 1Gi
+
+# The agent-sandbox controller is cluster-scoped: install it once, then let
+# every client release use it. Keep false when a controller already exists in
+# agent-sandbox-system, or two controllers will fight over the same Sandbox CRs.
+agentSandbox:
+  enabled: false
+
+# Not expressible as chart values today. Each one is a real gap, not a TODO:
+#   1. Overlay personas. persona_id carries no prompt on the Rust control plane
+#      (deploy/READINESS.md in the raava overlay), so tools/personas/qwalo does
+#      not reach a sandbox yet.
+#   2. Overlay system prompt. overlay.systemPrompt renders a ConfigMap mounted
+#      only on api-rs; no sandbox template consumes CENTAUR_OVERLAY_DIR.
+#   3. Overlay workflows. WORKFLOW_DIRS ignores toolServer.extraSources[].subdir
+#      and always points at the repo's workflows directory. Qwalo ships no
+#      workflows today; do not add one until this is fixed.
+#   4. iron-proxy inject mode matches a host, not a method or a path. It stamps
+#      the engine bearer on any request from the sandbox to the engine host,
+#      including a hand-written curl. See FAILURE_MODES.md F2.

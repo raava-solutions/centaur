@@ -1,0 +1,1338 @@
+{
+  "engine_contract": "src/v1/routes.ts + src/v1/auth.ts in raava-solutions/qwaelo-ai-engine (main f5a81e1); read routes per the t-0027 contract, which is not merged yet",
+  "engine_contract_note": "see README.md Engine contract",
+  "fake_engine": {
+    "account_scopes": [
+      "ere"
+    ],
+    "bearer": "fixture constant GOOD_TOKEN in run_fake_engine.py; synthetic, never a real credential",
+    "fixtures": "synthetic only"
+  },
+  "how_it_runs": "uvx --from overlays/qwalo/tools/engine engine <verb>, the same entrypoint the sandbox CLI shim uses",
+  "passed": 49,
+  "release_identity": {
+    "image_tag": "2026.10.20-d441128",
+    "tool_ref": "d441128e"
+  },
+  "results": [
+    {
+      "case": "leads_are_read",
+      "detail": "row field set matches leadView(), newest first",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "leads",
+          "--limit",
+          "5"
+        ],
+        "exit": 0,
+        "json": {
+          "account_scope": "ere",
+          "leads": [
+            {
+              "account_scope": "ere",
+              "confidence": 0.4,
+              "external_id": "sc-synthetic-0002",
+              "label": null,
+              "last_error": null,
+              "last_message_at": "2026-10-20T00:05:00Z",
+              "message_count": 1,
+              "probability_qualified": 0.51,
+              "score": 41,
+              "source": "v1",
+              "stage": null,
+              "status": "needs_human",
+              "tier": "review",
+              "transcript_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "updated_at": "2026-10-20T00:05:10Z",
+              "verdict": "cannot_tell"
+            },
+            {
+              "account_scope": "ere",
+              "confidence": 0.93,
+              "external_id": "sc-synthetic-0001",
+              "label": null,
+              "last_error": null,
+              "last_message_at": "2026-10-20T00:00:00Z",
+              "message_count": 2,
+              "probability_qualified": 0.93,
+              "score": 82,
+              "source": "v1",
+              "stage": "clef",
+              "status": "final",
+              "tier": "hot",
+              "transcript_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "updated_at": "2026-10-20T00:00:10Z",
+              "verdict": "qualified"
+            }
+          ],
+          "next_cursor": null
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/leads",
+          "query": {
+            "account_scope": "ere",
+            "limit": "5"
+          },
+          "scenario": "ok"
+        }
+      ],
+      "row_fields": [
+        "account_scope",
+        "confidence",
+        "external_id",
+        "label",
+        "last_error",
+        "last_message_at",
+        "message_count",
+        "probability_qualified",
+        "score",
+        "source",
+        "stage",
+        "status",
+        "tier",
+        "transcript_hash",
+        "updated_at",
+        "verdict"
+      ]
+    },
+    {
+      "case": "lead_detail_carries_thresholds_and_readings",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "lead",
+          "sc-synthetic-0001"
+        ],
+        "exit": 0,
+        "json": {
+          "account_scope": "ere",
+          "confidence": 0.93,
+          "external_id": "sc-synthetic-0001",
+          "label": null,
+          "last_error": null,
+          "last_message_at": "2026-10-20T00:00:00Z",
+          "message_count": 2,
+          "probability_qualified": 0.93,
+          "readings": [
+            {
+              "confidence": 0.93,
+              "created_at": "2026-10-20T00:00:09Z",
+              "decisive": 1,
+              "elapsed_ms": 1400,
+              "error": null,
+              "examples_used": 6,
+              "guide_version": 2,
+              "icp_version": 3,
+              "model_id": "clef-1",
+              "probability": 0.93,
+              "stage": "clef",
+              "threshold": 0.85,
+              "verdict": "qualified"
+            }
+          ],
+          "score": 82,
+          "source": "v1",
+          "stage": "clef",
+          "status": "final",
+          "thresholds": {
+            "clef": 0.85,
+            "glm": 0.8
+          },
+          "tier": "hot",
+          "transcript_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "updated_at": "2026-10-20T00:00:10Z",
+          "verdict": "qualified"
+        }
+      },
+      "reading_fields": [
+        "confidence",
+        "created_at",
+        "decisive",
+        "elapsed_ms",
+        "error",
+        "examples_used",
+        "guide_version",
+        "icp_version",
+        "model_id",
+        "probability",
+        "stage",
+        "threshold",
+        "verdict"
+      ],
+      "requests": [
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/leads/sc-synthetic-0001",
+          "query": {
+            "account_scope": "ere"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "verdict_answer_carries_the_merged_fields",
+      "fields": [
+        "account_scope",
+        "confidence",
+        "external_id",
+        "label",
+        "probability_qualified",
+        "stage",
+        "thresholds",
+        "transcript_hash",
+        "verdict"
+      ],
+      "passed": true,
+      "ran": {
+        "argv": [
+          "verdict",
+          "sc-synthetic-0001"
+        ],
+        "exit": 0,
+        "json": {
+          "account_scope": "ere",
+          "confidence": 0.93,
+          "external_id": "sc-synthetic-0001",
+          "label": null,
+          "probability_qualified": 0.93,
+          "stage": "clef",
+          "thresholds": {
+            "clef": 0.85,
+            "glm": 0.8
+          },
+          "transcript_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "verdict": "qualified"
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/leads/sc-synthetic-0001/verdict",
+          "query": {
+            "account_scope": "ere"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "queue_is_read",
+      "external_id": "sc-synthetic-0002",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "queue",
+          "--limit",
+          "5"
+        ],
+        "exit": 0,
+        "json": {
+          "account_scope": "ere",
+          "leads": [
+            {
+              "account_scope": "ere",
+              "confidence": 0.4,
+              "external_id": "sc-synthetic-0002",
+              "label": null,
+              "last_error": null,
+              "last_message_at": "2026-10-20T00:05:00Z",
+              "message_count": 1,
+              "probability_qualified": 0.51,
+              "score": 41,
+              "source": "v1",
+              "stage": null,
+              "status": "needs_human",
+              "tier": "review",
+              "transcript_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "updated_at": "2026-10-20T00:05:10Z",
+              "verdict": "cannot_tell"
+            }
+          ],
+          "next_cursor": null
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/review-queue",
+          "query": {
+            "account_scope": "ere",
+            "limit": "5"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "metrics_are_read",
+      "counts_seen": {
+        "by_tier": {
+          "hot": 1,
+          "review": 1
+        },
+        "leads": 2,
+        "review_queue": 1
+      },
+      "detail": "the default window is 7d and the answer says so",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "metrics"
+        ],
+        "exit": 0,
+        "json": {
+          "account_scope": "ere",
+          "agreement": {
+            "clef_vs_human": {
+              "agree": 1,
+              "compared": 1,
+              "rate": 1.0
+            },
+            "glm_vs_human": {
+              "agree": 0,
+              "compared": 0,
+              "rate": null
+            }
+          },
+          "by_status": {
+            "final": 1,
+            "needs_human": 1
+          },
+          "by_tier": {
+            "hot": 1,
+            "review": 1
+          },
+          "by_verdict": {
+            "cannot_tell": 1,
+            "qualified": 1
+          },
+          "leads": 2,
+          "review_queue": 1,
+          "reviews": {
+            "by_label": {
+              "qualified": 1
+            },
+            "per_day": [
+              {
+                "count": 1,
+                "day": "2026-10-20"
+              }
+            ],
+            "total": 1
+          },
+          "since": "2026-10-14T00:00:00.000Z",
+          "thresholds": {
+            "clef": 0.85,
+            "glm": 0.8
+          },
+          "until": "2026-10-21T00:00:00.000Z",
+          "window": "7d"
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/metrics",
+          "query": {
+            "account_scope": "ere",
+            "window": "7d"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "metrics_window_reaches_the_engine",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "metrics",
+          "--window",
+          "30d"
+        ],
+        "exit": 0,
+        "json": {
+          "account_scope": "ere",
+          "agreement": {
+            "clef_vs_human": {
+              "agree": 1,
+              "compared": 1,
+              "rate": 1.0
+            },
+            "glm_vs_human": {
+              "agree": 0,
+              "compared": 0,
+              "rate": null
+            }
+          },
+          "by_status": {
+            "final": 1,
+            "needs_human": 1
+          },
+          "by_tier": {
+            "hot": 1,
+            "review": 1
+          },
+          "by_verdict": {
+            "cannot_tell": 1,
+            "qualified": 1
+          },
+          "leads": 2,
+          "review_queue": 1,
+          "reviews": {
+            "by_label": {
+              "qualified": 1
+            },
+            "per_day": [
+              {
+                "count": 1,
+                "day": "2026-10-20"
+              }
+            ],
+            "total": 1
+          },
+          "since": "2026-09-21T00:00:00.000Z",
+          "thresholds": {
+            "clef": 0.85,
+            "glm": 0.8
+          },
+          "until": "2026-10-21T00:00:00.000Z",
+          "window": "30d"
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/metrics",
+          "query": {
+            "account_scope": "ere",
+            "window": "30d"
+          },
+          "scenario": "ok"
+        }
+      ],
+      "since": "2026-09-21T00:00:00.000Z"
+    },
+    {
+      "case": "bad_metrics_window_is_the_engines_answer",
+      "code": "invalid_query",
+      "detail": "the tool does not invent its own validation message",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "metrics",
+          "--window",
+          "yesterday"
+        ],
+        "exit": 1,
+        "json": {
+          "error": "invalid_query",
+          "http_status": 400,
+          "message": "window must be one of 7d, 30d, 90d, all"
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/metrics",
+          "query": {
+            "account_scope": "ere",
+            "window": "yesterday"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "page_cursor_round_trips",
+      "first": "sc-synthetic-0002",
+      "passed": true,
+      "requests": [
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/leads",
+          "query": {
+            "account_scope": "ere",
+            "limit": "1"
+          },
+          "scenario": "ok"
+        },
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/leads",
+          "query": {
+            "account_scope": "ere",
+            "cursor": "WyIyMDI2LTEwLTIwVDAwOjA1OjEwWiIsICJ2MTplcmU6c2Mtc3ludGhldGljLTAwMDIiXQ",
+            "limit": "1"
+          },
+          "scenario": "ok"
+        }
+      ],
+      "second": "sc-synthetic-0001"
+    },
+    {
+      "case": "junk_cursor_is_the_engines_400",
+      "code": "invalid_query",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "leads",
+          "--cursor",
+          "not-a-position"
+        ],
+        "exit": 1,
+        "json": {
+          "error": "invalid_query",
+          "http_status": 400,
+          "message": "cursor is not a position from this list"
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/leads",
+          "query": {
+            "account_scope": "ere",
+            "cursor": "not-a-position",
+            "limit": "20"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "a_token_without_read_cannot_read",
+      "code": "insufficient_capability",
+      "detail": "a Qwalo release holds a caps:[read] slot; the reverse is loud",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "leads",
+          "--limit",
+          "5"
+        ],
+        "exit": 1,
+        "json": {
+          "error": "insufficient_capability",
+          "http_status": 403,
+          "message": "this token may not read on /v1"
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer e2e-write-only-token",
+          "method": "GET",
+          "path": "/v1/leads",
+          "query": {
+            "account_scope": "ere",
+            "limit": "5"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "bearer_token_is_sent",
+      "detail": "1 request(s) carried the bearer",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "metrics"
+        ],
+        "exit": 0,
+        "json": {
+          "account_scope": "ere",
+          "agreement": {
+            "clef_vs_human": {
+              "agree": 1,
+              "compared": 1,
+              "rate": 1.0
+            },
+            "glm_vs_human": {
+              "agree": 0,
+              "compared": 0,
+              "rate": null
+            }
+          },
+          "by_status": {
+            "final": 1,
+            "needs_human": 1
+          },
+          "by_tier": {
+            "hot": 1,
+            "review": 1
+          },
+          "by_verdict": {
+            "cannot_tell": 1,
+            "qualified": 1
+          },
+          "leads": 2,
+          "review_queue": 1,
+          "reviews": {
+            "by_label": {
+              "qualified": 1
+            },
+            "per_day": [
+              {
+                "count": 1,
+                "day": "2026-10-20"
+              }
+            ],
+            "total": 1
+          },
+          "since": "2026-10-14T00:00:00.000Z",
+          "thresholds": {
+            "clef": 0.85,
+            "glm": 0.8
+          },
+          "until": "2026-10-21T00:00:00.000Z",
+          "window": "7d"
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/metrics",
+          "query": {
+            "account_scope": "ere",
+            "window": "7d"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "scope_is_forced_by_env",
+      "passed": true,
+      "ran": {
+        "accepted": {
+          "argv": [
+            "leads"
+          ],
+          "exit": 0,
+          "json": {
+            "account_scope": "ere",
+            "leads": [
+              {
+                "account_scope": "ere",
+                "confidence": 0.4,
+                "external_id": "sc-synthetic-0002",
+                "label": null,
+                "last_error": null,
+                "last_message_at": "2026-10-20T00:05:00Z",
+                "message_count": 1,
+                "probability_qualified": 0.51,
+                "score": 41,
+                "source": "v1",
+                "stage": null,
+                "status": "needs_human",
+                "tier": "review",
+                "transcript_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "updated_at": "2026-10-20T00:05:10Z",
+                "verdict": "cannot_tell"
+              },
+              {
+                "account_scope": "ere",
+                "confidence": 0.93,
+                "external_id": "sc-synthetic-0001",
+                "label": null,
+                "last_error": null,
+                "last_message_at": "2026-10-20T00:00:00Z",
+                "message_count": 2,
+                "probability_qualified": 0.93,
+                "score": 82,
+                "source": "v1",
+                "stage": "clef",
+                "status": "final",
+                "tier": "hot",
+                "transcript_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "updated_at": "2026-10-20T00:00:10Z",
+                "verdict": "qualified"
+              }
+            ],
+            "next_cursor": null
+          }
+        },
+        "rejected": {
+          "argv": [
+            "leads",
+            "--account-scope",
+            "other"
+          ],
+          "exit": 2,
+          "json": {
+            "_stderr": "usage: engine [-h] {leads,lead,verdict,queue,metrics} ...\nengine: error: unrecognized arguments: --account-scope other",
+            "_stdout": ""
+          }
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/leads",
+          "query": {
+            "account_scope": "ere",
+            "limit": "20"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "cross_scope_request_is_refused",
+      "detail": "a token held for ere answers 403 for another client, and the tool says so",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "leads"
+        ],
+        "exit": 1,
+        "json": {
+          "error": "wrong_scope",
+          "http_status": 403,
+          "message": "this token may not serve the requested account_scope"
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/leads",
+          "query": {
+            "account_scope": "acme",
+            "limit": "20"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "sandbox_shaped_env_sends_no_bearer",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "metrics"
+        ],
+        "exit": 1,
+        "json": {
+          "error": "invalid_token",
+          "http_status": 401,
+          "message": "bearer token required"
+        }
+      },
+      "requests": [
+        {
+          "authorization": null,
+          "method": "GET",
+          "path": "/v1/metrics",
+          "query": {
+            "account_scope": "ere",
+            "window": "7d"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "placeholder_token_is_never_sent",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "metrics"
+        ],
+        "exit": 1,
+        "json": {
+          "error": "invalid_token",
+          "http_status": 401,
+          "message": "bearer token required"
+        }
+      },
+      "requests": [
+        {
+          "authorization": null,
+          "method": "GET",
+          "path": "/v1/metrics",
+          "query": {
+            "account_scope": "ere",
+            "window": "7d"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "invalid_token_is_reported",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "metrics"
+        ],
+        "exit": 1,
+        "json": {
+          "error": "invalid_token",
+          "http_status": 401,
+          "message": "invalid token"
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer expired-e2e-token",
+          "method": "GET",
+          "path": "/v1/metrics",
+          "query": {
+            "account_scope": "ere",
+            "window": "7d"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "engine_503_is_reported",
+      "detail": "an unconfigured engine is named, never read as an empty queue",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "metrics"
+        ],
+        "exit": 1,
+        "json": {
+          "error": "service_auth_not_configured",
+          "http_status": 503,
+          "message": "SERVICE_TOKENS is not set or not a valid token list; refusing /v1"
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/metrics",
+          "query": {
+            "account_scope": "ere",
+            "window": "7d"
+          },
+          "scenario": "no_service_tokens"
+        }
+      ]
+    },
+    {
+      "case": "engine_404_is_reported",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "verdict",
+          "sc-synthetic-9999"
+        ],
+        "exit": 1,
+        "json": {
+          "error": "lead_not_found",
+          "http_status": 404,
+          "message": "no verdict for sc-synthetic-9999 in ere"
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/leads/sc-synthetic-9999/verdict",
+          "query": {
+            "account_scope": "ere"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "missing_engine_url_fails_closed",
+      "detail": "no request left the process",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "metrics"
+        ],
+        "exit": 1,
+        "json": {
+          "error": "engine_url_missing",
+          "message": "this release has no QWALO_ENGINE_URL; ask the operator"
+        }
+      },
+      "requests": []
+    },
+    {
+      "case": "missing_account_scope_fails_closed",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "metrics"
+        ],
+        "exit": 1,
+        "json": {
+          "error": "account_scope_missing",
+          "message": "this release has no QWALO_ACCOUNT_SCOPE; ask the operator"
+        }
+      },
+      "requests": []
+    },
+    {
+      "case": "engine_unreachable_is_reported",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "metrics"
+        ],
+        "exit": 1,
+        "json": {
+          "error": "engine_unreachable",
+          "message": "cannot reach the engine at http://127.0.0.1:1: [Errno <os>] Connection refused"
+        }
+      },
+      "requests": []
+    },
+    {
+      "case": "cli_exposes_no_write_verbs",
+      "detail": "the read surface is the whole surface",
+      "passed": true,
+      "requests": [],
+      "verbs": [
+        "lead",
+        "leads",
+        "metrics",
+        "queue",
+        "verdict"
+      ],
+      "write_calls": []
+    },
+    {
+      "case": "no_write_request_reaches_the_engine",
+      "methods": [
+        "GET"
+      ],
+      "passed": true,
+      "requests": [
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/leads",
+          "query": {
+            "account_scope": "ere",
+            "limit": "20"
+          },
+          "scenario": "ok"
+        },
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/leads/sc-synthetic-0001",
+          "query": {
+            "account_scope": "ere"
+          },
+          "scenario": "ok"
+        },
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/leads/sc-synthetic-0001/verdict",
+          "query": {
+            "account_scope": "ere"
+          },
+          "scenario": "ok"
+        },
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/review-queue",
+          "query": {
+            "account_scope": "ere",
+            "limit": "20"
+          },
+          "scenario": "ok"
+        },
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/metrics",
+          "query": {
+            "account_scope": "ere",
+            "window": "7d"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "mutation_proves_the_placeholder_guard_bites",
+      "detail": "the placeholder reaches the wire only when the guard is removed",
+      "mutated_tool_sent": [
+        "Bearer QWALO_ENGINE_TOKEN"
+      ],
+      "passed": true,
+      "requests": [
+        {
+          "authorization": "Bearer QWALO_ENGINE_TOKEN",
+          "method": "GET",
+          "path": "/v1/metrics",
+          "query": {
+            "account_scope": "ere",
+            "window": "7d"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "assertions": {
+        "base workflow tree is hidden": true,
+        "console link reaches the sandbox": true,
+        "engine scope reaches the sandbox": true,
+        "engine url reaches the sandbox with its host": true,
+        "harness auth is api_key": true,
+        "no literal slack secret": true,
+        "no trace sink is configured": true,
+        "one host per client": true,
+        "postgres service matches the baked host": true,
+        "system prompt is rendered in": true,
+        "tool dirs carry the overlay tools": true,
+        "webhook source namespace is admitted": true,
+        "workflow_dirs_seen": [
+          "/var/lib/centaur/repos/raava-solutions/centaur/workflows",
+          "/var/lib/centaur/repos/raava-solutions/centaur/overlays/qwalo/workflows"
+        ]
+      },
+      "case": "values_template_renders_in_the_real_chart",
+      "passed": true,
+      "requests": [],
+      "resources": 18
+    },
+    {
+      "case": "only_the_engine_tool_ships",
+      "passed": true,
+      "requests": [],
+      "shipped_tools": [
+        "engine"
+      ]
+    },
+    {
+      "base_telegram_can_send": true,
+      "case": "the_sandbox_gets_only_the_overlay_tool_tree",
+      "detail": "the base tool tree can message people, so it must not be mounted",
+      "passed": true,
+      "requests": [],
+      "tool_server_block": "enabled: true\n  repo: raava-solutions/centaur\n  ref: \"<<TOOL_REF>>\"\n  subdir: overlays/qwalo/tools\n  extraSources: []"
+    },
+    {
+      "accepted": "raava.dev/#/review?id=<external_id>  (stamped by the tool)\nengine token : iron-proxy inject; op://prod-qwalo-ere/QWALO_ENGINE_TOKEN/credential\nharness auth : codex api_key; op://prod-qwalo-ere/OPENAI_API_KEY/credential\nvault items  : SLACK_BOT_TOKEN SLACK_SIGNING_SECRET SLACKBOT_API_KEY OPENAI_API_KEY QWALO_ENGINE_TOKEN (field credential)\nvalues       : rendered clean (190 lines, deleted on exit)\n",
+      "case": "deploy_script_rejects_bad_client",
+      "passed": true,
+      "rejected": {
+        "argv": [
+          "overlays/qwalo/deploy/deploy-client.sh",
+          "--check",
+          "ERE_Investors"
+        ],
+        "exit": 2,
+        "stderr": "client must be a lowercase DNS slug (a-z, 0-9, -): got 'ERE_Investors'\n",
+        "stdout": ""
+      },
+      "requests": []
+    },
+    {
+      "case": "manifest_names_only_this_client_host",
+      "detail": "one app, one workspace, one host; no shared router, no unprompted posting scope",
+      "passed": true,
+      "request_url": "https://ere.qwalo.raava.dev/api/webhooks/slack",
+      "requests": []
+    },
+    {
+      "case": "values_template_has_no_secret_values",
+      "exported_proxy_secrets": [],
+      "literal_secret_assignments": [],
+      "offenders": [],
+      "op_reads": [
+        "op://${VAULT}/${item}/credential",
+        "op://${VAULT}/SLACK_BOT_TOKEN/credential",
+        "op://${VAULT}/SLACK_SIGNING_SECRET/credential",
+        "op://${VAULT}/SLACKBOT_API_KEY/credential"
+      ],
+      "passed": true,
+      "requests": []
+    },
+    {
+      "assignments": [
+        "ENGINE_SCOPE=\"$CLIENT\""
+      ],
+      "case": "account_scope_cannot_be_overridden",
+      "detail": "one assignment, no override: a stale export cannot retarget a client",
+      "passed": true,
+      "requests": []
+    },
+    {
+      "case": "deploy_requires_pinned_release_identity",
+      "floating_tag": "FATAL: QWALO_IMAGE_TAG must be a pinned tag, not latest",
+      "moving_ref": "FATAL: QWALO_TOOL_REF must be a pinned ref (a tag or a sha), not a moving branch",
+      "passed": true,
+      "requests": [],
+      "unpinned": "FATAL: QWALO_IMAGE_TAG is empty; the rendered values would name no image"
+    },
+    {
+      "case": "engine_secret_ref_matches_the_proxy_lookup",
+      "passed": true,
+      "refs": [
+        [
+          "${item}",
+          "credential"
+        ],
+        [
+          "OPENAI_API_KEY",
+          "credential"
+        ],
+        [
+          "QWALO_ENGINE_TOKEN",
+          "credential"
+        ],
+        [
+          "SLACKBOT_API_KEY",
+          "credential"
+        ],
+        [
+          "SLACK_BOT_TOKEN",
+          "credential"
+        ],
+        [
+          "SLACK_SIGNING_SECRET",
+          "credential"
+        ]
+      ],
+      "requests": [],
+      "vault_items": [
+        "SLACK_BOT_TOKEN",
+        "SLACK_SIGNING_SECRET",
+        "SLACKBOT_API_KEY",
+        "OPENAI_API_KEY",
+        "QWALO_ENGINE_TOKEN"
+      ]
+    },
+    {
+      "case": "no_double_scheme_url_anywhere",
+      "offenders": [],
+      "passed": true,
+      "requests": []
+    },
+    {
+      "case": "deploy_script_gates_the_apply",
+      "detail": "identity, vault scope, and secret existence are all proven before the apply",
+      "order": [
+        "pinned_identity",
+        "vault_scope",
+        "secret_exists",
+        "infra_secret",
+        "apply"
+      ],
+      "passed": true,
+      "requests": []
+    },
+    {
+      "case": "vault_scope_gate_passes_a_single_vault",
+      "exit": 0,
+      "passed": true,
+      "requests": [],
+      "stderr": "",
+      "stdout": "vault scope : prod-qwalo-ere only"
+    },
+    {
+      "case": "vault_scope_gate_refuses_a_second_vault",
+      "exit": 1,
+      "names_the_other_vault": true,
+      "passed": true,
+      "requests": []
+    },
+    {
+      "attested_exit": 0,
+      "case": "vault_scope_gate_fails_closed_when_it_cannot_check",
+      "exit": 1,
+      "passed": true,
+      "requests": []
+    },
+    {
+      "case": "manifest_mode_writes_the_file_it_promises",
+      "exit": 0,
+      "file_written": true,
+      "passed": true,
+      "requests": []
+    },
+    {
+      "baked_host": "centaur-centaur-postgres",
+      "case": "release_name_keeps_the_database_host",
+      "derived_host": "centaur-centaur-postgres",
+      "helm_release": "centaur",
+      "passed": true,
+      "requests": []
+    },
+    {
+      "case": "check_reports_the_deploy_facts",
+      "exit": 0,
+      "missing": [],
+      "passed": true,
+      "requests": []
+    },
+    {
+      "admitted_namespaces": [
+        "kube-system"
+      ],
+      "case": "values_template_names_the_webhook_source_namespace",
+      "detail": "the values file states the admitted source namespace explicitly",
+      "passed": true,
+      "requests": []
+    },
+    {
+      "case": "page_size_cannot_crash_the_tool",
+      "exit": 0,
+      "passed": true,
+      "requests": [],
+      "stderr": "",
+      "values": "[1, 50, 100, 1, 1, 1]"
+    },
+    {
+      "case": "lead_lookup_writes_nothing_to_a_database",
+      "detail": "the lead arrived by GET from the engine while no database was reachable",
+      "exit": 0,
+      "passed": true,
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/leads/sc-synthetic-0001"
+        }
+      ],
+      "tripwire_port_closed": true
+    },
+    {
+      "case": "overlay_ships_no_database_writer",
+      "detail": "no driver, no write statement, no registered workflow that could write",
+      "offenders": {},
+      "passed": true,
+      "requests": [],
+      "tool_dependencies": [
+        "dependencies = []"
+      ],
+      "workflow_files": []
+    },
+    {
+      "case": "seller_text_stays_behind_the_link",
+      "console_url": "https://console.test/#/review?id=sc-synthetic-0001",
+      "detail": "the answer summarises and links; the seller's words stay in the engine and the console",
+      "leaked_in": [],
+      "link_omitted_when_unconfigured": true,
+      "marker_is_in_the_store": true,
+      "passed": true,
+      "requests": [
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/leads",
+          "query": {
+            "account_scope": "ere",
+            "limit": "5"
+          },
+          "scenario": "ok"
+        },
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/leads/sc-synthetic-0001",
+          "query": {
+            "account_scope": "ere"
+          },
+          "scenario": "ok"
+        },
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/leads/sc-synthetic-0001/verdict",
+          "query": {
+            "account_scope": "ere"
+          },
+          "scenario": "ok"
+        },
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/review-queue",
+          "query": {
+            "account_scope": "ere",
+            "limit": "5"
+          },
+          "scenario": "ok"
+        },
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/metrics",
+          "query": {
+            "account_scope": "ere",
+            "window": "30d"
+          },
+          "scenario": "ok"
+        },
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/leads/sc-synthetic-0001",
+          "query": {
+            "account_scope": "ere"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "persona_forbids_quoting_and_gives_the_link",
+      "checks": {
+        "persona": {
+          "asks_for_a_summary": true,
+          "forbids_quoting": true,
+          "no_quoted_line_permission": true,
+          "points_at_the_record": true
+        },
+        "system_prompt": {
+          "asks_for_a_summary": true,
+          "forbids_quoting": true,
+          "no_quoted_line_permission": true,
+          "points_at_the_record": true
+        }
+      },
+      "passed": true,
+      "requests": []
+    },
+    {
+      "case": "inert_pieces_are_declared",
+      "detail": "the overlay must not claim inert pieces are live",
+      "passed": true,
+      "requests": []
+    },
+    {
+      "case": "fixtures_carry_no_real_contact_data",
+      "detail": "every fixture id is synthetic; no emails or phone numbers in the suite",
+      "passed": true,
+      "requests": []
+    }
+  ],
+  "skipped": 0,
+  "suite": "qwalo-overlay-engine-fake-engine",
+  "total": 49
+}

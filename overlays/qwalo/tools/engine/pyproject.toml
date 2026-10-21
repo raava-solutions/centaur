@@ -1,0 +1,32 @@
+[project]
+name = "engine"
+description = "Qwalo engine read-only lead qualification API (leads, verdict, review queue, metrics)"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+engine = "centaur_tool_engine.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[tool.hatch.build.targets.wheel.sources]
+"." = "centaur_tool_engine"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.centaur]
+module = "client.py"
+# The engine host of THIS release. If a client's engine answers on another host,
+# change this one line: an iron-proxy secret that does not match the host is
+# never injected, and the release fails closed with 401 rather than reading
+# someone else's data. QWALO_ENGINE_URL must name the same host.
+hosts = ["qwalo.raava.dev"]
+# Inject mode: the sandbox never holds the bearer token. iron-proxy adds
+# `Authorization: Bearer <token>` in flight for the host above.
+secrets = [
+    {type = "http", name = "QWALO_ENGINE_TOKEN", mode = "inject", inject_header = "Authorization", inject_formatter = "Bearer {{ .Value }}", hosts = ["qwalo.raava.dev"]},
+]
