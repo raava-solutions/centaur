@@ -181,9 +181,9 @@ REQUEST_LOG: list = []
 # src/v1/read.ts, src/v1/routes.ts, and src/v1/auth.ts on the engine's main
 # branch. Implemented: GET /v1/leads, /v1/review-queue, /v1/leads/{id},
 # /v1/leads/{id}/verdict, /v1/metrics, /v1/settings. Not implemented:
-# /v1/documents/{kind} — no tool verb reads it yet (bead
-# qwalo-overlay-engine-settings-documents-verbs). The 404 it answers is the
-# fake's absence, not the engine's.
+# /v1/documents/{kind} — no tool verb reads it yet, so the 404 this fake answers is
+# its own absence and not the engine's. Recorded in the PR's "Not in this PR" list:
+# this repo has no beads database, so there is no issue id to point at.
 
 MAX_PAGE = 100
 DEFAULT_PAGE = 50

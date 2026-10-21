@@ -185,16 +185,17 @@ Understand what this token is and is not:
   enumerate another client's leads.
 - **It is not scoped by verb, and the sandbox cannot be handed a read-only token.**
   `TokenSlot` in `src/v1/auth.ts` carries `caller`, `sha256`, and `account_scopes`
-  only — no capability field. And iron-proxy's inject mode matches a **host**, not a
+  only. The engine has since grown `caps`, and this step must use them; see below. And
+  iron-proxy's inject mode matches a **host**, not a
   method or a path, so it stamps this bearer on any request from the sandbox to
   `qwalo.raava.dev`, including `curl -X POST .../v1/labels` typed in a shell. The
   read-only tool surface protects the tool path and nothing else.
 
-  The engine change this release waits on, tracked as a bead in the engine repo: a
-  per-slot read capability, such as `"methods": ["GET"]` or `"read_only": true`,
-  enforced in `requireService` before the route runs, answered 403
-  `method_not_allowed`. Until that exists and this release uses it, step 5 blocks
-  go-live.
+  What this release waits on now is **issuance**, tracked as `qe-bre`. The capability
+  exists — `SERVICE_TOKENS` slots carry `caps` and `requireCap("read")` answers 403
+  `insufficient_capability` — but no `caps: ["read"]` token has been minted for a
+  client, so today the only token a Qwalo vault could hold may also write. Step 5 blocks
+  go-live until step 4 stores a read-only token and nothing else.
 
 ## Step 5 — two hard gates before anything reaches a client
 

@@ -76,7 +76,8 @@ class EngineClient:
         ``status`` is one of pending, final, needs_human, error; a name the
         engine does not know comes back as 400 ``invalid_query`` naming it. The
         upstream surface also filters by ``verdict`` and ``tier``; this tool does
-        not expose them yet (bead: overlay engine settings/documents verbs).
+        not expose them yet. There is no verb for ``GET /v1/settings`` or
+        ``GET /v1/documents/{kind}`` either; both are follow-ups on the PR.
         """
         params: dict[str, Any] = {"limit": _clamped(limit, 1, 100)}
         if status:

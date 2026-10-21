@@ -59,13 +59,17 @@ the engine bearer on **any** request from that sandbox to that host, including a
 hand-written `curl -X POST .../v1/labels`. The read-only tool surface protects the
 tool path; it does not protect the sandbox.
 
-Nothing in this overlay makes the token read-only, because the engine cannot mint a
-read-only token: `TokenSlot` in `src/v1/auth.ts` carries `caller`, `sha256`, and
-`account_scopes`, and no capability field. **A client must not go live on this
-token.** `RELEASE.md` step 5 is a hard gate, not advice. The engine change asked
-for (tracked as a bead in the engine repo): a per-slot read capability, such as
-`"methods": ["GET"]`, enforced in `requireService` before the route runs, answered
-403 `method_not_allowed`.
+Nothing in this overlay makes the token read-only. The engine's capability half has
+since landed: a `SERVICE_TOKENS` slot carries `caps`, and `requireCap("read")` answers
+403 `insufficient_capability` before any read route runs (`src/v1/auth.ts`,
+`src/v1/read.ts`). The tool reports that code as the named error it is
+(`a_token_without_read_cannot_read`), because "your token may not read" and "this client
+has no leads" must never look the same.
+
+What has not landed is **issuance**: nobody has minted a `caps: ["read"]` slot for a
+client, so the only token available to a Qwalo vault is one that may also
+`POST /v1/qualify`. **A client must not go live on that token.** `RELEASE.md` step 5 is
+a hard gate, not advice, and the ask is `qe-bre` in the engine repo.
 
 Until that exists, the honest claim is: *a sandbox cannot leak a credential it does
 not hold, and its only shipped tool cannot write* — not *the token is read-only*.
