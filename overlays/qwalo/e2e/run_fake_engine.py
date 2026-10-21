@@ -20,17 +20,21 @@ Artifact: overlays/qwalo/e2e/reports/fake-engine.json
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
 
 E2E_DIR = Path(__file__).resolve().parent
 OVERLAY_DIR = E2E_DIR.parent
@@ -44,52 +48,188 @@ PLACEHOLDER = "QWALO_ENGINE_TOKEN"  # the value iron-proxy's placeholder_env see
 SCOPES = ["ere"]
 
 # ---- fixtures: synthetic, no real contact data (FAILURE_MODES F7) ---------------
+# Shapes are copied from the merged read surface: leadView() in
+# src/v1/routes.ts, the verdict body in the same file, leadReadings() and
+# scopeMetrics() in src/v1/read-db.ts. A fixture that invents a shape proves
+# nothing about the engine, and this suite spent a round doing exactly that.
+
+THRESHOLDS = {"clef": 0.85, "glm": 0.8}
+
+# The rows, in the field set leadView() puts on the wire. `lead_id` stays off the
+# wire but is what a keyset cursor is built from, so the fake keeps it internally.
 LEADS = {
     "sc-synthetic-0001": {
+        "lead_id": "v1:ere:sc-synthetic-0001",
         "external_id": "sc-synthetic-0001",
         "account_scope": "ere",
+        "source": "v1",
+        "status": "final",
         "verdict": "qualified",
+        "stage": "clef",
         "probability_qualified": 0.93,
         "confidence": 0.93,
-        "stage": "clef",
+        "score": 82,
+        "tier": "hot",
         "transcript_hash": "a" * 64,
-        "thresholds": {"clef": 0.85, "glm": 0.8},
+        "message_count": 4,
         "label": None,
+        "label_created_at": None,
+        "last_error": None,
+        "last_message_at": "2026-10-20T00:00:00Z",
+        "updated_at": "2026-10-20T00:00:10Z",
     },
     "sc-synthetic-0002": {
+        "lead_id": "v1:ere:sc-synthetic-0002",
         "external_id": "sc-synthetic-0002",
         "account_scope": "ere",
+        "source": "v1",
+        "status": "needs_human",
         "verdict": "cannot_tell",
-        "probability_qualified": 0.51,
-        "confidence": 0.51,
         "stage": None,
+        "probability_qualified": 0.51,
+        "confidence": 0.4,
+        "score": 41,
+        "tier": "review",
         "transcript_hash": "b" * 64,
-        "thresholds": {"clef": 0.85, "glm": 0.8},
+        "message_count": 2,
         "label": None,
+        "label_created_at": None,
+        "last_error": None,
+        "last_message_at": "2026-10-20T00:05:00Z",
+        "updated_at": "2026-10-20T00:05:10Z",
     },
 }
-LEAD_ROWS = [
-    {
-        "external_id": "sc-synthetic-0001",
-        "verdict": "qualified",
-        "stage": "clef",
-        "probability_qualified": 0.93,
-        "updated_at": "2026-10-20T00:00:00Z",
-    },
-    {
-        "external_id": "sc-synthetic-0002",
-        "verdict": "cannot_tell",
-        "stage": None,
-        "probability_qualified": 0.51,
-        "updated_at": "2026-10-20T00:05:00Z",
-    },
-]
 
-REQUEST_LOG: list[dict] = []
+# leadView(): the wire projection, and `label` nested. Nothing here carries
+# seller text, a name, or a phone number (F-V15).
+WIRE_FIELDS = (
+    "external_id",
+    "account_scope",
+    "source",
+    "status",
+    "verdict",
+    "stage",
+    "probability_qualified",
+    "confidence",
+    "score",
+    "tier",
+    "label",
+    "transcript_hash",
+    "message_count",
+    "last_error",
+    "last_message_at",
+    "updated_at",
+)
+
+
+def lead_view(row: dict) -> dict:
+    out = {key: row[key] for key in WIRE_FIELDS}
+    out["label"] = (
+        None
+        if row["label"] is None
+        else {"label": row["label"], "created_at": row["label_created_at"]}
+    )
+    return out
+
+
+# leadReadings(): the verdict rows, newest first, projected to no seller text.
+READINGS = {
+    "sc-synthetic-0001": [
+        {
+            "stage": "clef",
+            "model_id": "clef-1",
+            "verdict": "qualified",
+            "probability": 0.93,
+            "confidence": 0.93,
+            "threshold": 0.85,
+            "decisive": 1,
+            "error": None,
+            "icp_version": 3,
+            "guide_version": 2,
+            "examples_used": 6,
+            "elapsed_ms": 1400,
+            "created_at": "2026-10-20T00:00:09Z",
+        }
+    ],
+    "sc-synthetic-0002": [
+        {
+            "stage": "glm",
+            "model_id": "glm-1",
+            "verdict": None,
+            "probability": 0.51,
+            "confidence": 0.4,
+            "threshold": 0.8,
+            "decisive": 0,
+            "error": None,
+            "icp_version": 3,
+            "guide_version": 2,
+            "examples_used": 6,
+            "elapsed_ms": 5200,
+            "created_at": "2026-10-20T00:05:09Z",
+        }
+    ],
+}
+
+# The list rows, newest first, as pageLeads() orders them.
+LEAD_ROWS = [lead_view(LEADS["sc-synthetic-0002"]), lead_view(LEADS["sc-synthetic-0001"])]
+
+REQUEST_LOG: list = []
+
+
+# ---- the fake engine: the merged read surface, nothing else ----------------------
+# Routes, query rules, paging, capability checks, and error bodies follow
+# src/v1/read.ts, src/v1/routes.ts, and src/v1/auth.ts on the engine's main
+# branch. Implemented: GET /v1/leads, /v1/review-queue, /v1/leads/{id},
+# /v1/leads/{id}/verdict, /v1/metrics, /v1/settings. Not implemented:
+# /v1/documents/{kind} — no tool verb reads it yet (bead
+# qwalo-overlay-engine-settings-documents-verbs). The 404 it answers is the
+# fake's absence, not the engine's.
+
+MAX_PAGE = 100
+DEFAULT_PAGE = 50
+WINDOWS = {"7d": 7, "30d": 30, "90d": 90, "all": None}
+STATUSES = ("pending", "final", "needs_human", "error")
+VERDICT_FILTERS = ("qualified", "not_qualified", "cannot_tell")
+TIERS = ("hot", "warm", "cold", "review")
+READ_ONLY_DOOR = frozenset(("/leads", "/review-queue", "/metrics", "/settings"))
+
+# `caps` per slot, as SERVICE_TOKENS carries them (src/v1/auth.ts). GOOD_TOKEN is
+# what a Qwalo release should hold: read only. WRITE_ONLY_TOKEN exists so a test
+# can hear what the engine says when a token may not read (F-V17).
+WRITE_ONLY_TOKEN = "e2e-write-only-token"
+TOKEN_CAPS = {GOOD_TOKEN: ("read",), WRITE_ONLY_TOKEN: ("write",)}
+
+
+def _encode_cursor(at: str, lead_id: str) -> str:
+    """The engine's keyset position: base64url of [updated_at, lead_id]."""
+    raw = base64.urlsafe_b64encode(json.dumps([at, lead_id]).encode()).decode()
+    return raw.rstrip("=")
+
+
+def _decode_cursor(raw: str) -> tuple[str, str]:
+    """A position from this list, or raise the way the surface answers 400."""
+    padded = raw + "=" * (-len(raw) % 4)
+    parsed = json.loads(base64.urlsafe_b64decode(padded).decode())
+    if (
+        not isinstance(parsed, list)
+        or len(parsed) != 2
+        or not all(isinstance(x, str) for x in parsed)
+        or not _parseable_day(parsed[0])
+    ):
+        raise ValueError("not a position from this list")
+    return parsed[0], parsed[1]
+
+
+def _parseable_day(text: str) -> bool:
+    try:
+        datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return True
+    except ValueError:
+        return False
 
 
 class FakeEngine(BaseHTTPRequestHandler):
-    """Bearer auth, one scope list, the engine's error bodies, and nothing else."""
+    """Bearer auth, slot caps, one scope list, keyset paging, and the engine's errors."""
 
     scenario = "ok"
 
@@ -104,16 +244,13 @@ class FakeEngine(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
-    def _error(self, status: int, code: str, message: str) -> None:
-        self._send(status, {"error": {"code": code, "message": message}})
-
-    def do_POST(self) -> None:
-        self._record("POST")
-        self._error(405, "method_not_allowed", "the v1 surface has no write route here")
+    def _error(self, status: int, code: str, message: str, details: dict | None = None) -> None:
+        error: dict[str, object] = {"code": code, "message": message}
+        if details:
+            error["details"] = details
+        self._send(status, {"error": error})
 
     def _record(self, method: str) -> dict:
-        from urllib.parse import parse_qs, urlparse
-
         parsed = urlparse(self.path)
         entry = {
             "method": method,
@@ -125,10 +262,28 @@ class FakeEngine(BaseHTTPRequestHandler):
         REQUEST_LOG.append(entry)
         return entry
 
+    # Every write verb on a read path answers 405 `read_only`, the way
+    # v1Read.on(["POST","PUT","PATCH","DELETE"], ...) does. A bare 404 would
+    # suggest the path does not exist; it does, it is simply not writable (F-V16).
+    def _write_door(self) -> None:
+        self._record(self.command)
+        path = urlparse(self.path).path
+        if path in READ_ONLY_DOOR or re.fullmatch(r"/v1/leads/[^/]+", path):
+            self._error(
+                405,
+                "read_only",
+                "this /v1 route is read-only; settings writes stay on /api/settings",
+            )
+        else:
+            self._error(404, "not_found", f"no route {path}")
+
+    do_POST = _write_door
+    do_PUT = _write_door
+    do_PATCH = _write_door
+    do_DELETE = _write_door
+
     def do_GET(self) -> None:
         self._record("GET")
-        from urllib.parse import parse_qs, urlparse
-
         parsed = urlparse(self.path)
         query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
 
@@ -136,72 +291,219 @@ class FakeEngine(BaseHTTPRequestHandler):
             self._error(
                 503,
                 "service_auth_not_configured",
-                "SERVICE_TOKENS is not set; refusing /v1",
+                "SERVICE_TOKENS is not set or not a valid token list; refusing /v1",
             )
             return
+
         bearer = (self.headers.get("authorization") or "").removeprefix("Bearer ").strip()
         if not bearer:
             self._error(401, "invalid_token", "bearer token required")
             return
-        if bearer != GOOD_TOKEN:
+        caps = TOKEN_CAPS.get(bearer)
+        if caps is None:
             self._error(401, "invalid_token", "invalid token")
             return
+
         scope = query.get("account_scope", "")
-        if not scope:
-            self._error(
-                400,
-                "invalid_account_scope",
-                "account_scope must be a slug of 1-64 chars",
-            )
+        if not scope or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", scope):
+            self._error(400, "invalid_account_scope", "account_scope must be a slug of 1-64 chars")
             return
         if scope not in SCOPES:
-            # The engine answers 403 without naming the scopes a token holds.
-            self._error(
-                403,
-                "wrong_scope",
-                "this token may not serve the requested account_scope",
-            )
+            # The engine names neither the token's scopes nor the requested one.
+            self._error(403, "wrong_scope", "this token may not serve the requested account_scope")
+            return
+        if "read" not in caps:
+            self._error(403, "insufficient_capability", "this token may not read on /v1")
             return
 
-        if parsed.path == "/v1/leads":
-            self._send(200, {"account_scope": scope, "leads": LEAD_ROWS, "next_cursor": None})
-        elif parsed.path == "/v1/review-queue":
-            self._send(
-                200,
-                {
-                    "account_scope": scope,
-                    "queue": [
-                        {
-                            "external_id": "sc-synthetic-0002",
-                            "reason": "models could not decide; queued for a human label",
-                        }
-                    ],
+        routes = {
+            "/v1/leads": lambda: self._list(query, scope, queued=False),
+            "/v1/review-queue": lambda: self._list(query, scope, queued=True),
+            "/v1/metrics": lambda: self._metrics(query, scope),
+            "/v1/settings": lambda: self._send(200, self._settings(scope)),
+        }
+        handler = routes.get(parsed.path)
+        if handler:
+            handler()
+            return
+        single = re.fullmatch(r"/v1/leads/([^/]+)", parsed.path)
+        if single:
+            self._one(unquote(single.group(1)), scope)
+            return
+        verdict = re.fullmatch(r"/v1/leads/([^/]+)/verdict", parsed.path)
+        if verdict:
+            self._verdict(unquote(verdict.group(1)), scope)
+            return
+        self._error(404, "not_found", f"no route {parsed.path}")
+
+    # ---- the list routes: one keyset page, no offset (F-V14) --------------------
+
+    def _list(self, query: dict, scope: str, queued: bool) -> None:
+        bad = [name for name, value in self._query_problems(query)]
+        if bad:
+            self._error(400, "invalid_query", "query parameter not understood", {"params": bad})
+            return
+        if query.get("cursor"):
+            try:
+                _decode_cursor(query["cursor"])
+            except ValueError:
+                self._error(
+                    400,
+                    "invalid_query",
+                    "cursor is not a position from this list",
+                    {"params": ["cursor"]},
+                )
+                return
+
+        limit = int(query["limit"]) if query.get("limit", "").isdigit() else DEFAULT_PAGE
+        rows = LEAD_ROWS if queued else self._filtered(query)
+        if queued:
+            rows = [row for row in rows if row["status"] == "needs_human"]
+        if query.get("cursor"):
+            at, lead_id = _decode_cursor(query["cursor"])
+            rows = [
+                row
+                for row in rows
+                if (row["updated_at"], LEADS[row["external_id"]]["lead_id"]) < (at, lead_id)
+            ]
+        peeked = rows[: limit + 1]
+        page = peeked[:limit]
+        last = page[-1] if page else None
+        self._send(
+            200,
+            {
+                "account_scope": scope,
+                "leads": page,
+                "next_cursor": (
+                    _encode_cursor(last["updated_at"], LEADS[last["external_id"]]["lead_id"])
+                    if len(peeked) > limit and last
+                    else None
+                ),
+            },
+        )
+
+    def _query_problems(self, query: dict) -> list[tuple[str, str]]:
+        """The ListQuerySchema failures, as (parameter, reason) pairs."""
+        problems: list[tuple[str, str]] = []
+        if query.get("status", "") and query["status"] not in STATUSES:
+            problems.append(("status", "unknown status"))
+        if query.get("verdict", "") and query["verdict"] not in VERDICT_FILTERS:
+            problems.append(("verdict", "unknown verdict"))
+        if query.get("tier", "") and query["tier"] not in TIERS:
+            problems.append(("tier", "unknown tier"))
+        limit = query.get("limit", "")
+        if limit and (not limit.isdigit() or not 1 <= int(limit) <= MAX_PAGE):
+            problems.append(("limit", f"an integer from 1 to {MAX_PAGE}"))
+        cursor = query.get("cursor", "")
+        if len(cursor) > 400:
+            problems.append(("cursor", "at most 400 chars"))
+        return problems
+
+    def _filtered(self, query: dict) -> list:
+        return [
+            row for row in LEAD_ROWS if not query.get("status") or row["status"] == query["status"]
+        ]
+
+    # ---- one lead ---------------------------------------------------------------
+
+    def _one(self, external_id: str, scope: str) -> None:
+        row = LEADS.get(external_id)
+        if row is None:
+            self._error(404, "lead_not_found", "no lead with that external_id in this scope")
+            return
+        self._send(
+            200,
+            {
+                **lead_view(row),
+                "thresholds": THRESHOLDS,
+                "readings": READINGS[external_id],
+            },
+        )
+
+    def _verdict(self, external_id: str, scope: str) -> None:
+        row = LEADS.get(external_id)
+        if row is None:
+            self._error(404, "lead_not_found", f"no verdict for {external_id} in {scope}")
+            return
+        self._send(
+            200,
+            {
+                "external_id": external_id,
+                "account_scope": scope,
+                "verdict": row["label"] or row["verdict"],
+                "probability_qualified": row["probability_qualified"],
+                "confidence": row["confidence"],
+                "stage": "human" if row["label"] else row["stage"],
+                "transcript_hash": row["transcript_hash"],
+                "thresholds": THRESHOLDS,
+                "label": None,
+            },
+        )
+
+    # ---- metrics and settings ---------------------------------------------------
+
+    def _metrics(self, query: dict, scope: str) -> None:
+        name = query.get("window") or "7d"
+        days = WINDOWS.get(name)
+        if days is None and name != "all":
+            self._error(
+                400,
+                "invalid_query",
+                f"window must be one of {', '.join(WINDOWS)}",
+                {"params": ["window"]},
+            )
+            return
+        # One clock read for every count in the answer, and the answer says what
+        # it covered (F-V20).
+        until_at = datetime(2026, 10, 21)
+        until = until_at.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        since = (
+            None
+            if name == "all"
+            else (until_at - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        )
+        self._send(
+            200,
+            {
+                "account_scope": scope,
+                "window": name,
+                "since": since,
+                "until": until,
+                "thresholds": THRESHOLDS,
+                "leads": 2,
+                "by_status": {"final": 1, "needs_human": 1},
+                "by_verdict": {"qualified": 1, "cannot_tell": 1},
+                "by_tier": {"hot": 1, "review": 1},
+                "review_queue": 1,
+                "reviews": {
+                    "total": 1,
+                    "by_label": {"qualified": 1},
+                    "per_day": [{"day": "2026-10-20", "count": 1}],
                 },
-            )
-        elif parsed.path == "/v1/metrics":
-            self._send(
-                200,
-                {"account_scope": scope, "totals": {"qualified": 1, "needs_human": 1}},
-            )
-        elif re.fullmatch(r"/v1/leads/[^/]+", parsed.path):
-            external_id = parsed.path.rsplit("/", 1)[1]
-            lead = LEADS.get(external_id)
-            if lead is None:
-                self._error(404, "lead_not_found", f"no lead {external_id} in {scope}")
-                return
-            self._send(
-                200,
-                {"external_id": external_id, "account_scope": scope, "snapshots": []},
-            )
-        elif re.fullmatch(r"/v1/leads/[^/]+/verdict", parsed.path):
-            external_id = parsed.path.rsplit("/", 2)[1]
-            verdict = LEADS.get(external_id)
-            if verdict is None:
-                self._error(404, "lead_not_found", f"no verdict for {external_id} in {scope}")
-                return
-            self._send(200, verdict)
-        else:
-            self._error(404, "not_found", f"no route {parsed.path}")
+                "agreement": {
+                    "clef_vs_human": {"compared": 1, "agree": 1, "rate": 1.0},
+                    "glm_vs_human": {"compared": 0, "agree": 0, "rate": None},
+                },
+            },
+        )
+
+    def _settings(self, scope: str) -> dict:
+        clef = THRESHOLDS["clef"]
+        return {
+            "account_scope": scope,
+            "thresholds": THRESHOLDS,
+            "tiers": {
+                "hot": f"verdict qualified with P(qualified) at or above the Clef threshold ({clef})",
+                "warm": "verdict qualified below the Clef threshold",
+                "cold": "verdict not_qualified",
+                "review": "no verdict yet: the case is queued, pending, or the models abstained",
+            },
+            "models": {"clef": "clef-1", "glm": "glm-1"},
+            "example_count": 6,
+            "timeouts_ms": {"clef": 20000, "glm": 60000},
+            "documents": {"icp": 3, "scoring_guide": 2},
+            "writable_via": "PATCH /api/settings (reviewer password); /v1 is read-only",
+        }
 
 
 # ---- driving the CLI -------------------------------------------------------------
@@ -215,8 +517,12 @@ def run_cli(argv: list[str], env: dict[str, str], tool_dir: Path = TOOL_DIR) -> 
         "QWALO_ENGINE_TOKEN": "",
     }
     environ.update(env)
+    # --no-cache because uv keys a path source's cached build by path, not by
+    # content: without it this gate can pass against a wheel older than the tool it
+    # is supposed to be proving. -q keeps uv's build chatter out of stderr, which is
+    # the CLI's own output as far as the cases below are concerned.
     proc = subprocess.run(
-        ["uvx", "--from", str(tool_dir), "engine", *argv],
+        ["uvx", "--no-cache", "-q", "--from", str(tool_dir), "engine", *argv],
         capture_output=True,
         text=True,
         env=environ,
@@ -248,55 +554,183 @@ def case(func):
 
 @case
 def leads_are_read(base: str) -> dict:
+    """One keyset page, in the row shape src/v1/routes.ts leadView() emits."""
     out = run_cli(["leads", "--limit", "5"], cli_env(base))
-    ids = [row["external_id"] for row in out["json"].get("leads", [])]
-    return {
-        "ran": out,
-        "ok": out["exit"] == 0 and ids == list(LEADS),
-        "detail": "two synthetic leads, newest first",
-    }
-
-
-@case
-def lead_is_read(base: str) -> dict:
-    out = run_cli(["lead", "sc-synthetic-0001"], cli_env(base))
-    return {
-        "ran": out,
-        "ok": out["exit"] == 0 and out["json"].get("external_id") == "sc-synthetic-0001",
-    }
-
-
-@case
-def verdict_is_read(base: str) -> dict:
-    out = run_cli(["verdict", "sc-synthetic-0001"], cli_env(base))
     body = out["json"]
-    ok = (
-        out["exit"] == 0
-        and body.get("verdict") == "qualified"
-        and body.get("probability_qualified") == 0.93
-        and "thresholds" in body
+    rows = body.get("leads", [])
+    ids = [row["external_id"] for row in rows]
+    newest_first = [row["updated_at"] for row in rows] == sorted(
+        (row["updated_at"] for row in rows), reverse=True
     )
     return {
         "ran": out,
-        "ok": ok,
-        "detail": "verdict, probability, and thresholds come back intact",
+        "ok": out["exit"] == 0
+        and ids == ["sc-synthetic-0002", "sc-synthetic-0001"]
+        and newest_first
+        and body.get("account_scope") == "ere"
+        and rows != []
+        and set(LEAD_ROWS[0]) == set(rows[0]),
+        "row_fields": sorted(rows[0]) if rows else [],
+        "detail": "row field set matches leadView(), newest first",
+    }
+
+
+@case
+def lead_detail_carries_thresholds_and_readings(base: str) -> dict:
+    """GET /v1/leads/:id answers the view plus thresholds plus every reading."""
+    out = run_cli(["lead", "sc-synthetic-0001"], cli_env(base))
+    body = out["json"]
+    readings = body.get("readings") or [{}]
+    return {
+        "ran": out,
+        "ok": out["exit"] == 0
+        and body.get("external_id") == "sc-synthetic-0001"
+        and body.get("thresholds") == THRESHOLDS
+        and readings[0].get("decisive") == 1
+        and set(LEAD_ROWS[0]) <= set(body),
+        "reading_fields": sorted(readings[0]),
+    }
+
+
+@case
+def verdict_answer_carries_the_merged_fields(base: str) -> dict:
+    out = run_cli(["verdict", "sc-synthetic-0001"], cli_env(base))
+    body = out["json"]
+    return {
+        "ran": out,
+        "ok": out["exit"] == 0
+        and body.get("verdict") == "qualified"
+        and body.get("probability_qualified") == 0.93
+        and body.get("thresholds") == THRESHOLDS
+        and set(body)
+        == {
+            "external_id",
+            "account_scope",
+            "verdict",
+            "probability_qualified",
+            "confidence",
+            "stage",
+            "transcript_hash",
+            "thresholds",
+            "label",
+        },
+        "fields": sorted(body),
     }
 
 
 @case
 def queue_is_read(base: str) -> dict:
+    """The review queue answers with lead rows, not a queue-shaped invention."""
     out = run_cli(["queue", "--limit", "5"], cli_env(base))
-    queue = out["json"].get("queue", [])
+    body = out["json"]
+    rows = body.get("leads", [])
     return {
         "ran": out,
-        "ok": out["exit"] == 0 and len(queue) == 1 and "reason" in queue[0],
+        "ok": out["exit"] == 0
+        and len(rows) == 1
+        and rows[0]["status"] == "needs_human"
+        and "next_cursor" in body
+        and set(rows[0]) == set(LEAD_ROWS[0]),
+        "external_id": rows[0]["external_id"] if rows else None,
     }
 
 
 @case
 def metrics_are_read(base: str) -> dict:
+    """Metrics name the window they covered, and count what the surface counts."""
     out = run_cli(["metrics"], cli_env(base))
-    return {"ran": out, "ok": out["exit"] == 0 and "totals" in out["json"]}
+    body = out["json"]
+    return {
+        "ran": out,
+        "ok": out["exit"] == 0
+        and body.get("window") == "7d"
+        and body.get("since")
+        and body.get("until")
+        and body.get("thresholds") == THRESHOLDS
+        and set(body.get("agreement", {})) == {"clef_vs_human", "glm_vs_human"},
+        "counts_seen": {k: body.get(k) for k in ("leads", "review_queue", "by_tier")},
+        "detail": "the default window is 7d and the answer says so",
+    }
+
+
+@case
+def metrics_window_reaches_the_engine(base: str) -> dict:
+    """--window is sent, not swallowed: 30d comes back as a 30-day window."""
+    out = run_cli(["metrics", "--window", "30d"], cli_env(base))
+    body = out["json"]
+    return {
+        "ran": out,
+        "ok": out["exit"] == 0
+        and body.get("window") == "30d"
+        and out["argv"][-2:] == ["--window", "30d"],
+        "since": body.get("since"),
+    }
+
+
+@case
+def bad_metrics_window_is_the_engines_answer(base: str) -> dict:
+    """A window the surface does not know comes back as its 400, verbatim."""
+    out = run_cli(["metrics", "--window", "yesterday"], cli_env(base))
+    return {
+        "ran": out,
+        "ok": out["exit"] != 0 and out["json"].get("error") == "invalid_query",
+        "code": out["json"].get("error"),
+        "detail": "the tool does not invent its own validation message",
+    }
+
+
+@case
+def page_cursor_round_trips(base: str) -> dict:
+    """next_cursor from one page is the cursor that fetches the next one.
+
+    The surface pages by keyset. An agent that ignores the cursor reads the same
+    page forever; one that mangles it gets 400 invalid_query, never a full scan.
+    """
+    first = run_cli(["leads", "--limit", "1"], cli_env(base))
+    cursor = first["json"].get("next_cursor")
+    if not cursor:
+        return {"ok": False, "detail": "limit=1 returned no next_cursor", "ran": first}
+    second = run_cli(["leads", "--limit", "1", "--cursor", cursor], cli_env(base))
+    rows = second["json"].get("leads", [])
+    return {
+        "ok": first["exit"] == 0
+        and second["exit"] == 0
+        and len(rows) == 1
+        and rows[0]["external_id"] != first["json"]["leads"][0]["external_id"],
+        "first": first["json"]["leads"][0]["external_id"],
+        "second": rows[0]["external_id"] if rows else None,
+    }
+
+
+@case
+def junk_cursor_is_the_engines_400(base: str) -> dict:
+    out = run_cli(["leads", "--cursor", "not-a-position"], cli_env(base))
+    return {
+        "ran": out,
+        "ok": out["exit"] != 0 and out["json"].get("error") == "invalid_query",
+        "code": out["json"].get("error"),
+    }
+
+
+@case
+def a_token_without_read_cannot_read(base: str) -> dict:
+    """The engine's `caps` are the read-only guarantee, and the tool names it.
+
+    A slot with caps ["write"] is a valid SERVICE_TOKENS entry. Reading with it
+    answers 403 insufficient_capability (src/v1/auth.ts requireCap): the token is
+    wrong for this release, which is not the same message as "no leads".
+    """
+    env = cli_env(base)
+    env["QWALO_ENGINE_TOKEN"] = WRITE_ONLY_TOKEN
+    out = run_cli(["leads", "--limit", "5"], env)
+    return {
+        "ran": out,
+        "ok": out["exit"] != 0
+        and out["json"].get("error") == "insufficient_capability"
+        and out["json"].get("http_status") == 403,
+        "code": out["json"].get("error"),
+        "detail": "a Qwalo release holds a caps:[read] slot; the reverse is loud",
+    }
 
 
 @case
@@ -1018,6 +1452,91 @@ def page_size_cannot_crash_the_tool(base: str) -> dict:
         "exit": proc.returncode,
         "values": got,
         "stderr": proc.stderr.strip()[-200:],
+    }
+
+
+@case
+def lead_lookup_writes_nothing_to_a_database(base: str) -> dict:
+    """The owner's rule is that Centaur stores no lead data, so prove it by tripwire.
+
+    Grepping for a write would only prove nobody wrote one today. Instead the tool
+    runs with DATABASE_URL, PGPASSWORD, PGHOST and PGPORT pointed at a closed local
+    port: anything that opened a Postgres connection would die on the connection, and
+    a stateless read answers the lead from the engine and never notices. A non-GET
+    request in the same window would be a second story, so it is asserted too.
+    """
+    env = cli_env(base)
+    env.update(
+        {
+            "DATABASE_URL": "postgresql://nobody:nobody@127.0.0.1:1/ai_v2",
+            "PGPASSWORD": "not-a-real-password",
+            "PGHOST": "127.0.0.1",
+            "PGPORT": "1",
+        }
+    )
+    # The tripwire must be live, or the case proves nothing: if that port accepted a
+    # connection, "it never noticed" would be indistinguishable from "it wrote there".
+    probe = socket.socket()
+    probe.settimeout(2)
+    try:
+        probe.connect(("127.0.0.1", 1))
+        tripwire_live = False
+    except OSError:
+        tripwire_live = True
+    finally:
+        probe.close()
+
+    before = len(REQUEST_LOG)
+    out = run_cli(["lead", "sc-synthetic-0001"], env)
+    seen = REQUEST_LOG[before:]
+    return {
+        "tripwire_port_closed": tripwire_live,
+        "ok": tripwire_live
+        and out["exit"] == 0
+        and out["json"].get("external_id") == "sc-synthetic-0001"
+        and seen != []
+        and all(r["method"] == "GET" for r in seen),
+        "exit": out["exit"],
+        "requests": [{"method": r["method"], "path": r["path"]} for r in seen],
+        "detail": "the lead arrived by GET from the engine while no database was reachable",
+    }
+
+
+@case
+def overlay_ships_no_database_writer(base: str) -> dict:
+    """No tool, workflow, or dependency in the overlay could put a row in a client DB.
+
+    Three parts, because the claim spans three kinds of artifact: the tool declares no
+    dependency at all, so no driver is ever installed into a sandbox image; no overlay
+    source imports a driver or names a write statement; and the workflow directory a
+    client release registers (FAILURE_MODES F10) ships no Python file, so the release
+    can register nothing that writes.
+    """
+    drivers = ("psycopg", "asyncpg", "sqlalchemy", "peewee", "sqlite3", "import dolt")
+    writes = ("insert into", "upsert_messages", "create table", "update leads")
+    offenders: dict[str, list[str]] = {}
+    for path in sorted(OVERLAY_DIR.rglob("*")):
+        if not path.is_file() or path.suffix not in {".py", ".toml", ".sh", ".yaml", ".yml"}:
+            continue
+        # This file names the strings in order to look for them.
+        if path.name == Path(__file__).name:
+            continue
+        text = path.read_text(errors="ignore").lower()
+        hits = [needle for needle in drivers + writes if needle in text]
+        if hits:
+            offenders[str(path.relative_to(OVERLAY_DIR))] = hits
+
+    declared = (TOOL_DIR / "pyproject.toml").read_text()
+    deps_line = [line for line in declared.splitlines() if line.startswith("dependencies")]
+    ships_no_deps = deps_line == ["dependencies = []"]
+    workflows = [f.name for f in (OVERLAY_DIR / "workflows").glob("*.py")]
+
+    return {
+        "ok": not offenders and ships_no_deps and workflows == [],
+        "offenders": offenders,
+        "tool_dependencies": deps_line,
+        "workflow_files": workflows,
+        "detail": "no driver, no write statement, no registered workflow that could write",
     }
 
 

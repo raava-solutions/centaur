@@ -63,12 +63,10 @@ apiRs:
   # The chart builds WORKFLOW_DIRS as <repoCache.hostPath>/<toolServer.repo>/workflows
   # with no knob, so a client release would register the base tree: eleven server-side
   # workflows. Two of them, slack_backfill and slack_sync, call upsert_messages and
-  # write channel history into Postgres on a schedule. Reviewers being allowed to see
-  # their own client's seller text (owner decision, 2026-10-21) is about answering a
-  # question in a thread; an unattended job that copies every conversation into a
-  # database is a different act, and whether seller text should persist at all is still
-  # open with the owners. Until it is settled, nothing writes text into a client's
-  # database that no human asked for. The rest (google_calendar_sync, linear_sync,
+  # write channel history into Postgres on a schedule. The owner's decision of
+  # 2026-10-21 is that Centaur stores no lead or seller data: the release reads the
+  # engine when it answers and keeps nothing. A backfill is a writer, so it is not
+  # registered here, whatever a reviewer is allowed to see in Slack. The rest (google_calendar_sync, linear_sync,
   # github_issue_triage, google_drive_sync) would register against secrets this vault
   # does not hold and fail like broken integrations.
   #

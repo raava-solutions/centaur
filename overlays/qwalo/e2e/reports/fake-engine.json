@@ -9,7 +9,7 @@
     "fixtures": "synthetic only"
   },
   "how_it_runs": "uvx --from overlays/qwalo/tools/engine engine <verb>, the same entrypoint the sandbox CLI shim uses",
-  "passed": 40,
+  "passed": 47,
   "release_identity": {
     "image_tag": "2026.10.20-d441128",
     "tool_ref": "d441128e"
@@ -17,7 +17,7 @@
   "results": [
     {
       "case": "leads_are_read",
-      "detail": "two synthetic leads, newest first",
+      "detail": "row field set matches leadView(), newest first",
       "passed": true,
       "ran": {
         "argv": [
@@ -30,18 +30,40 @@
           "account_scope": "ere",
           "leads": [
             {
-              "external_id": "sc-synthetic-0001",
-              "probability_qualified": 0.93,
-              "stage": "clef",
-              "updated_at": "2026-10-20T00:00:00Z",
-              "verdict": "qualified"
+              "account_scope": "ere",
+              "confidence": 0.4,
+              "external_id": "sc-synthetic-0002",
+              "label": null,
+              "last_error": null,
+              "last_message_at": "2026-10-20T00:05:00Z",
+              "message_count": 2,
+              "probability_qualified": 0.51,
+              "score": 41,
+              "source": "v1",
+              "stage": null,
+              "status": "needs_human",
+              "tier": "review",
+              "transcript_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "updated_at": "2026-10-20T00:05:10Z",
+              "verdict": "cannot_tell"
             },
             {
-              "external_id": "sc-synthetic-0002",
-              "probability_qualified": 0.51,
-              "stage": null,
-              "updated_at": "2026-10-20T00:05:00Z",
-              "verdict": "cannot_tell"
+              "account_scope": "ere",
+              "confidence": 0.93,
+              "external_id": "sc-synthetic-0001",
+              "label": null,
+              "last_error": null,
+              "last_message_at": "2026-10-20T00:00:00Z",
+              "message_count": 4,
+              "probability_qualified": 0.93,
+              "score": 82,
+              "source": "v1",
+              "stage": "clef",
+              "status": "final",
+              "tier": "hot",
+              "transcript_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "updated_at": "2026-10-20T00:00:10Z",
+              "verdict": "qualified"
             }
           ],
           "next_cursor": null
@@ -58,10 +80,28 @@
           },
           "scenario": "ok"
         }
+      ],
+      "row_fields": [
+        "account_scope",
+        "confidence",
+        "external_id",
+        "label",
+        "last_error",
+        "last_message_at",
+        "message_count",
+        "probability_qualified",
+        "score",
+        "source",
+        "stage",
+        "status",
+        "tier",
+        "transcript_hash",
+        "updated_at",
+        "verdict"
       ]
     },
     {
-      "case": "lead_is_read",
+      "case": "lead_detail_carries_thresholds_and_readings",
       "passed": true,
       "ran": {
         "argv": [
@@ -71,10 +111,59 @@
         "exit": 0,
         "json": {
           "account_scope": "ere",
+          "confidence": 0.93,
           "external_id": "sc-synthetic-0001",
-          "snapshots": []
+          "label": null,
+          "last_error": null,
+          "last_message_at": "2026-10-20T00:00:00Z",
+          "message_count": 4,
+          "probability_qualified": 0.93,
+          "readings": [
+            {
+              "confidence": 0.93,
+              "created_at": "2026-10-20T00:00:09Z",
+              "decisive": 1,
+              "elapsed_ms": 1400,
+              "error": null,
+              "examples_used": 6,
+              "guide_version": 2,
+              "icp_version": 3,
+              "model_id": "clef-1",
+              "probability": 0.93,
+              "stage": "clef",
+              "threshold": 0.85,
+              "verdict": "qualified"
+            }
+          ],
+          "score": 82,
+          "source": "v1",
+          "stage": "clef",
+          "status": "final",
+          "thresholds": {
+            "clef": 0.85,
+            "glm": 0.8
+          },
+          "tier": "hot",
+          "transcript_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "updated_at": "2026-10-20T00:00:10Z",
+          "verdict": "qualified"
         }
       },
+      "reading_fields": [
+        "confidence",
+        "created_at",
+        "decisive",
+        "elapsed_ms",
+        "error",
+        "examples_used",
+        "guide_version",
+        "icp_version",
+        "model_id",
+        "probability",
+        "stage",
+        "threshold",
+        "verdict"
+      ],
       "requests": [
         {
           "authorization": "Bearer <fixture-bearer>",
@@ -88,8 +177,18 @@
       ]
     },
     {
-      "case": "verdict_is_read",
-      "detail": "verdict, probability, and thresholds come back intact",
+      "case": "verdict_answer_carries_the_merged_fields",
+      "fields": [
+        "account_scope",
+        "confidence",
+        "external_id",
+        "label",
+        "probability_qualified",
+        "stage",
+        "thresholds",
+        "transcript_hash",
+        "verdict"
+      ],
       "passed": true,
       "ran": {
         "argv": [
@@ -126,6 +225,7 @@
     },
     {
       "case": "queue_is_read",
+      "external_id": "sc-synthetic-0002",
       "passed": true,
       "ran": {
         "argv": [
@@ -136,12 +236,27 @@
         "exit": 0,
         "json": {
           "account_scope": "ere",
-          "queue": [
+          "leads": [
             {
+              "account_scope": "ere",
+              "confidence": 0.4,
               "external_id": "sc-synthetic-0002",
-              "reason": "models could not decide; queued for a human label"
+              "label": null,
+              "last_error": null,
+              "last_message_at": "2026-10-20T00:05:00Z",
+              "message_count": 2,
+              "probability_qualified": 0.51,
+              "score": 41,
+              "source": "v1",
+              "stage": null,
+              "status": "needs_human",
+              "tier": "review",
+              "transcript_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "updated_at": "2026-10-20T00:05:10Z",
+              "verdict": "cannot_tell"
             }
-          ]
+          ],
+          "next_cursor": null
         }
       },
       "requests": [
@@ -159,6 +274,15 @@
     },
     {
       "case": "metrics_are_read",
+      "counts_seen": {
+        "by_tier": {
+          "hot": 1,
+          "review": 1
+        },
+        "leads": 2,
+        "review_queue": 1
+      },
+      "detail": "the default window is 7d and the answer says so",
       "passed": true,
       "ran": {
         "argv": [
@@ -167,10 +291,51 @@
         "exit": 0,
         "json": {
           "account_scope": "ere",
-          "totals": {
-            "needs_human": 1,
+          "agreement": {
+            "clef_vs_human": {
+              "agree": 1,
+              "compared": 1,
+              "rate": 1.0
+            },
+            "glm_vs_human": {
+              "agree": 0,
+              "compared": 0,
+              "rate": null
+            }
+          },
+          "by_status": {
+            "final": 1,
+            "needs_human": 1
+          },
+          "by_tier": {
+            "hot": 1,
+            "review": 1
+          },
+          "by_verdict": {
+            "cannot_tell": 1,
             "qualified": 1
-          }
+          },
+          "leads": 2,
+          "review_queue": 1,
+          "reviews": {
+            "by_label": {
+              "qualified": 1
+            },
+            "per_day": [
+              {
+                "count": 1,
+                "day": "2026-10-20"
+              }
+            ],
+            "total": 1
+          },
+          "since": "2026-10-14T00:00:00.000Z",
+          "thresholds": {
+            "clef": 0.85,
+            "glm": 0.8
+          },
+          "until": "2026-10-21T00:00:00.000Z",
+          "window": "7d"
         }
       },
       "requests": [
@@ -179,7 +344,203 @@
           "method": "GET",
           "path": "/v1/metrics",
           "query": {
-            "account_scope": "ere"
+            "account_scope": "ere",
+            "window": "7d"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "metrics_window_reaches_the_engine",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "metrics",
+          "--window",
+          "30d"
+        ],
+        "exit": 0,
+        "json": {
+          "account_scope": "ere",
+          "agreement": {
+            "clef_vs_human": {
+              "agree": 1,
+              "compared": 1,
+              "rate": 1.0
+            },
+            "glm_vs_human": {
+              "agree": 0,
+              "compared": 0,
+              "rate": null
+            }
+          },
+          "by_status": {
+            "final": 1,
+            "needs_human": 1
+          },
+          "by_tier": {
+            "hot": 1,
+            "review": 1
+          },
+          "by_verdict": {
+            "cannot_tell": 1,
+            "qualified": 1
+          },
+          "leads": 2,
+          "review_queue": 1,
+          "reviews": {
+            "by_label": {
+              "qualified": 1
+            },
+            "per_day": [
+              {
+                "count": 1,
+                "day": "2026-10-20"
+              }
+            ],
+            "total": 1
+          },
+          "since": "2026-09-21T00:00:00.000Z",
+          "thresholds": {
+            "clef": 0.85,
+            "glm": 0.8
+          },
+          "until": "2026-10-21T00:00:00.000Z",
+          "window": "30d"
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/metrics",
+          "query": {
+            "account_scope": "ere",
+            "window": "30d"
+          },
+          "scenario": "ok"
+        }
+      ],
+      "since": "2026-09-21T00:00:00.000Z"
+    },
+    {
+      "case": "bad_metrics_window_is_the_engines_answer",
+      "code": "invalid_query",
+      "detail": "the tool does not invent its own validation message",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "metrics",
+          "--window",
+          "yesterday"
+        ],
+        "exit": 1,
+        "json": {
+          "error": "invalid_query",
+          "http_status": 400,
+          "message": "window must be one of 7d, 30d, 90d, all"
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/metrics",
+          "query": {
+            "account_scope": "ere",
+            "window": "yesterday"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "page_cursor_round_trips",
+      "first": "sc-synthetic-0002",
+      "passed": true,
+      "requests": [
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/leads",
+          "query": {
+            "account_scope": "ere",
+            "limit": "1"
+          },
+          "scenario": "ok"
+        },
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/leads",
+          "query": {
+            "account_scope": "ere",
+            "cursor": "WyIyMDI2LTEwLTIwVDAwOjA1OjEwWiIsICJ2MTplcmU6c2Mtc3ludGhldGljLTAwMDIiXQ",
+            "limit": "1"
+          },
+          "scenario": "ok"
+        }
+      ],
+      "second": "sc-synthetic-0001"
+    },
+    {
+      "case": "junk_cursor_is_the_engines_400",
+      "code": "invalid_query",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "leads",
+          "--cursor",
+          "not-a-position"
+        ],
+        "exit": 1,
+        "json": {
+          "error": "invalid_query",
+          "http_status": 400,
+          "message": "cursor is not a position from this list"
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/leads",
+          "query": {
+            "account_scope": "ere",
+            "cursor": "not-a-position",
+            "limit": "20"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "a_token_without_read_cannot_read",
+      "code": "insufficient_capability",
+      "detail": "a Qwalo release holds a caps:[read] slot; the reverse is loud",
+      "passed": true,
+      "ran": {
+        "argv": [
+          "leads",
+          "--limit",
+          "5"
+        ],
+        "exit": 1,
+        "json": {
+          "error": "insufficient_capability",
+          "http_status": 403,
+          "message": "this token may not read on /v1"
+        }
+      },
+      "requests": [
+        {
+          "authorization": "Bearer e2e-write-only-token",
+          "method": "GET",
+          "path": "/v1/leads",
+          "query": {
+            "account_scope": "ere",
+            "limit": "5"
           },
           "scenario": "ok"
         }
@@ -196,10 +557,51 @@
         "exit": 0,
         "json": {
           "account_scope": "ere",
-          "totals": {
-            "needs_human": 1,
+          "agreement": {
+            "clef_vs_human": {
+              "agree": 1,
+              "compared": 1,
+              "rate": 1.0
+            },
+            "glm_vs_human": {
+              "agree": 0,
+              "compared": 0,
+              "rate": null
+            }
+          },
+          "by_status": {
+            "final": 1,
+            "needs_human": 1
+          },
+          "by_tier": {
+            "hot": 1,
+            "review": 1
+          },
+          "by_verdict": {
+            "cannot_tell": 1,
             "qualified": 1
-          }
+          },
+          "leads": 2,
+          "review_queue": 1,
+          "reviews": {
+            "by_label": {
+              "qualified": 1
+            },
+            "per_day": [
+              {
+                "count": 1,
+                "day": "2026-10-20"
+              }
+            ],
+            "total": 1
+          },
+          "since": "2026-10-14T00:00:00.000Z",
+          "thresholds": {
+            "clef": 0.85,
+            "glm": 0.8
+          },
+          "until": "2026-10-21T00:00:00.000Z",
+          "window": "7d"
         }
       },
       "requests": [
@@ -208,7 +610,8 @@
           "method": "GET",
           "path": "/v1/metrics",
           "query": {
-            "account_scope": "ere"
+            "account_scope": "ere",
+            "window": "7d"
           },
           "scenario": "ok"
         }
@@ -227,18 +630,40 @@
             "account_scope": "ere",
             "leads": [
               {
-                "external_id": "sc-synthetic-0001",
-                "probability_qualified": 0.93,
-                "stage": "clef",
-                "updated_at": "2026-10-20T00:00:00Z",
-                "verdict": "qualified"
+                "account_scope": "ere",
+                "confidence": 0.4,
+                "external_id": "sc-synthetic-0002",
+                "label": null,
+                "last_error": null,
+                "last_message_at": "2026-10-20T00:05:00Z",
+                "message_count": 2,
+                "probability_qualified": 0.51,
+                "score": 41,
+                "source": "v1",
+                "stage": null,
+                "status": "needs_human",
+                "tier": "review",
+                "transcript_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "updated_at": "2026-10-20T00:05:10Z",
+                "verdict": "cannot_tell"
               },
               {
-                "external_id": "sc-synthetic-0002",
-                "probability_qualified": 0.51,
-                "stage": null,
-                "updated_at": "2026-10-20T00:05:00Z",
-                "verdict": "cannot_tell"
+                "account_scope": "ere",
+                "confidence": 0.93,
+                "external_id": "sc-synthetic-0001",
+                "label": null,
+                "last_error": null,
+                "last_message_at": "2026-10-20T00:00:00Z",
+                "message_count": 4,
+                "probability_qualified": 0.93,
+                "score": 82,
+                "source": "v1",
+                "stage": "clef",
+                "status": "final",
+                "tier": "hot",
+                "transcript_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "updated_at": "2026-10-20T00:00:10Z",
+                "verdict": "qualified"
               }
             ],
             "next_cursor": null
@@ -318,7 +743,8 @@
           "method": "GET",
           "path": "/v1/metrics",
           "query": {
-            "account_scope": "ere"
+            "account_scope": "ere",
+            "window": "7d"
           },
           "scenario": "ok"
         }
@@ -344,7 +770,8 @@
           "method": "GET",
           "path": "/v1/metrics",
           "query": {
-            "account_scope": "ere"
+            "account_scope": "ere",
+            "window": "7d"
           },
           "scenario": "ok"
         }
@@ -370,7 +797,8 @@
           "method": "GET",
           "path": "/v1/metrics",
           "query": {
-            "account_scope": "ere"
+            "account_scope": "ere",
+            "window": "7d"
           },
           "scenario": "ok"
         }
@@ -388,7 +816,7 @@
         "json": {
           "error": "service_auth_not_configured",
           "http_status": 503,
-          "message": "SERVICE_TOKENS is not set; refusing /v1"
+          "message": "SERVICE_TOKENS is not set or not a valid token list; refusing /v1"
         }
       },
       "requests": [
@@ -397,7 +825,8 @@
           "method": "GET",
           "path": "/v1/metrics",
           "query": {
-            "account_scope": "ere"
+            "account_scope": "ere",
+            "window": "7d"
           },
           "scenario": "no_service_tokens"
         }
@@ -540,7 +969,8 @@
           "method": "GET",
           "path": "/v1/metrics",
           "query": {
-            "account_scope": "ere"
+            "account_scope": "ere",
+            "window": "7d"
           },
           "scenario": "ok"
         }
@@ -559,7 +989,8 @@
           "method": "GET",
           "path": "/v1/metrics",
           "query": {
-            "account_scope": "ere"
+            "account_scope": "ere",
+            "window": "7d"
           },
           "scenario": "ok"
         }
@@ -605,7 +1036,7 @@
       "tool_server_block": "enabled: true\n  repo: raava-solutions/centaur\n  ref: \"<<TOOL_REF>>\"\n  subdir: overlays/qwalo/tools\n  extraSources: []"
     },
     {
-      "accepted": "tps://ere.qwalo.raava.dev\naccount_scope: ere (no override)\nengine token : iron-proxy inject; op://prod-qwalo-ere/QWALO_ENGINE_TOKEN/credential\nharness auth : codex api_key; op://prod-qwalo-ere/OPENAI_API_KEY/credential\nvault items  : SLACK_BOT_TOKEN SLACK_SIGNING_SECRET SLACKBOT_API_KEY OPENAI_API_KEY QWALO_ENGINE_TOKEN (field credential)\nvalues       : rendered clean (186 lines, deleted on exit)\n",
+      "accepted": "tps://ere.qwalo.raava.dev\naccount_scope: ere (no override)\nengine token : iron-proxy inject; op://prod-qwalo-ere/QWALO_ENGINE_TOKEN/credential\nharness auth : codex api_key; op://prod-qwalo-ere/OPENAI_API_KEY/credential\nvault items  : SLACK_BOT_TOKEN SLACK_SIGNING_SECRET SLACKBOT_API_KEY OPENAI_API_KEY QWALO_ENGINE_TOKEN (field credential)\nvalues       : rendered clean (184 lines, deleted on exit)\n",
       "case": "deploy_script_rejects_bad_client",
       "passed": true,
       "rejected": {
@@ -777,6 +1208,30 @@
       "values": "[1, 50, 100, 1, 1, 1]"
     },
     {
+      "case": "lead_lookup_writes_nothing_to_a_database",
+      "detail": "the lead arrived by GET from the engine while no database was reachable",
+      "exit": 0,
+      "passed": true,
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/v1/leads/sc-synthetic-0001"
+        }
+      ],
+      "tripwire_port_closed": true
+    },
+    {
+      "case": "overlay_ships_no_database_writer",
+      "detail": "no driver, no write statement, no registered workflow that could write",
+      "offenders": {},
+      "passed": true,
+      "requests": [],
+      "tool_dependencies": [
+        "dependencies = []"
+      ],
+      "workflow_files": []
+    },
+    {
       "case": "inert_pieces_are_declared",
       "detail": "the overlay must not claim inert pieces are live",
       "passed": true,
@@ -791,5 +1246,5 @@
   ],
   "skipped": 0,
   "suite": "qwalo-overlay-engine-fake-engine",
-  "total": 40
+  "total": 47
 }

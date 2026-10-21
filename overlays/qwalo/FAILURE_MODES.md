@@ -222,29 +222,33 @@ seller text to that client's reviewers is the product (F7 control 5).
    one workspace, one namespace per client.
 4. The E2E fixtures are synthetic ids with no contact data, so the repo, its tests,
    and the committed artifact cannot become where a client's leads leak.
-5. Decided by the owner on 2026-10-21, replacing the 2026-10-20 rule for this client's
-   own release: **a reviewer may see the seller's text messages.** A reviewer cannot
-   judge what they are approving from a count, so the message text is in scope for the
-   client's own release.
-   - **In scope:** this client's Slack workspace, and this client's Centaur release.
-     One app, one workspace, one namespace, one `account_scope` — F1, F3 and F5 are
-     what keep that true.
-   - **Not in scope:** any other client, any shared surface, and any third-party trace
-     sink. See F12 for why a tracing endpoint is the easiest way to break this quietly.
-   - **Open question, for the owners, not decided here:** does seller text *persist* in
-     Centaur's Postgres, or live only inside the turn that read it? The facts the answer
-     has to fit: the Rust control plane writes `session_messages` and `session_events`
-     with no redaction or retention knob, so today anything the agent shows is also
-     stored, and nothing in an overlay can make it otherwise. If the answer is "in-turn
-     only", that is a platform ask, not an overlay setting.
-      - **Nothing in this overlay decides what the agent may show.** The sandbox prompt
-     carries no rule about seller text, and none is being added while the owners settle
-     the overlay and the persona: which words a reviewer may see is their call, not a
-     runbook's. No E2E case here claims to prove a posture.
-   - The platform fact any answer has to survive: the Rust control plane writes
-     `session_messages` and `session_events` in plain text with no redaction or
-     retention knob, so anything shown in a turn is also stored, and no overlay setting
-     changes that.
+5. Two decisions by the owner, both 2026-10-21, both for this client's own release:
+
+   - **A reviewer may see the seller's text messages.** A reviewer cannot judge what
+     they are approving from a count. In scope: this client's Slack workspace and this
+     client's Centaur release — one app, one workspace, one namespace, one
+     `account_scope`, which is what F1, F3 and F5 keep true. Not in scope: any other
+     client, any shared surface, any third-party trace sink (F12).
+   - **Centaur stores none of it.** The overlay is a read path, not a place. The
+     client release's Postgres holds the control plane's own state (assignments,
+     executions, events, sessions) and no lead, transcript, or snapshot: every number
+     and every message is fetched from the engine at the moment it is answered.
+     `lead_lookup_writes_nothing_to_a_database` proves a read cannot reach a database
+     at all, and `overlay_ships_no_database_writer` proves the overlay carries no
+     driver, no SQL, and no workflow that could write one. F10 keeps the base repo's
+     Slack backfill out of the release.
+
+   One path the overlay cannot close, stated because it is the whole difference between
+   "the overlay writes nothing" and "nothing is written": the Rust control plane writes
+   `session_messages` and `session_events` in plain text, with no redaction and no
+   retention knob, so whatever the agent quotes into its reply is stored in that
+   release's database as part of the conversation. Honouring "Centaur is only the tool
+   layer" therefore needs one of two things, and the choice is the owners' in the
+   persona pass, not this file's: answers that point at the record (lead id, conversation
+   id) and leave the words in Qwalo and SmarterContact, or a platform change that turns
+   persistence off or redaction on. No overlay setting does either, and no case here
+   claims one does.
+
 6. Nothing may pull conversation text in from outside the turn uninvited. The base
    repo's workflow tree ships `slack_backfill.py` and `slack_sync.py`, which call
    `upsert_messages` and backfill a whole channel's history into Postgres. Whether or
@@ -252,10 +256,12 @@ seller text to that client's reviewers is the product (F7 control 5).
    different act from answering a question, and a client release does not register it.
    See F10.
 
-**Test.** `fixtures_carry_no_real_contact_data` (the repo and its artifact carry none),
-F10 for the ingest path, F12 for the export path. Showing seller text inside one client
-is a product decision rather than a control, and whether it persists in Postgres is an
-open owner question; no case here claims to prove either.
+**Test.** `fixtures_carry_no_real_contact_data` (repo, tests, and committed artifact
+carry none), `lead_lookup_writes_nothing_to_a_database`,
+`overlay_ships_no_database_writer` (the overlay cannot write lead data anywhere), F10
+for the ingest path, F12 for the export path. What the agent may *show* is a product
+decision and what it *quotes into a reply* is stored by the platform's own transcript
+writer: no case here claims to prove either of those.
 
 ## F8 — the release is inert and green anyway
 
@@ -304,9 +310,9 @@ script reports, so a rename fails the suite rather than the client.
 ## F10 — a client release registers the base workflow tree
 
 **Damage.** A workflow nobody in this deployment asked for runs on a schedule and
-writes a client's channel history into Postgres, while the owners are still deciding
-whether seller text should persist at all. Nothing fails, no pod restarts, and the
-retention is invisible until someone asks for it back.
+writes a client's channel history into Postgres, in a release whose owner decided that
+Centaur stores no lead or seller data. Nothing fails, no pod restarts, and the retention
+is invisible until someone asks for it back.
 
 **Why it is real.** `contrib/chart/templates/apirs.yaml:12` builds `WORKFLOW_DIRS` as
 `<repoCache.hostPath>/<toolServer.repo>/workflows` with no subdirectory knob, so
@@ -390,9 +396,10 @@ Langfuse integration, with no code anywhere and no test failing.
    own boundary, named in that client's values file, with the client's approval — spans
    carry prompts and tool output, which is the seller's text.
 
-**Open, for the owners:** tracing and the seller-text decision point the same direction.
-A trace sink is also the fastest way to answer "does it persist?" in the worst available
-way. `RELEASE.md` step 10 lists this as not-configured, not as forbidden-forever.
+A trace sink is the fastest way to break the no-persistence decision from outside: the
+client's Postgres stays clean while every prompt and tool result accumulates in someone
+else's retention policy. `RELEASE.md` step 10 lists tracing as not-configured, not as
+forbidden-forever.
 
 **Test.** `values_template_renders_in_the_real_chart` (no `OTEL_*` in the rendered
 release). The negative is the whole proof; there is nothing to observe at runtime

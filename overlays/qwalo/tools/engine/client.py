@@ -14,9 +14,15 @@ Auth and tenancy come from the deployment environment, never from the caller:
                           iron-proxy inject-mode, which seeds no placeholder env
                           var, and the real bearer is added in flight
 
-The token is scoped to that one ``account_scope`` on the engine side
-(``src/v1/auth.ts``): a token that asks for another client's scope is answered
-403 and the tool reports it verbatim.
+Two things limit what the engine will answer, and both live on the engine
+(``src/v1/auth.ts``): the slot's ``account_scopes`` list, and its ``caps``. A
+Qwalo release holds a slot with ``caps: ["read"]``, so the bearer cannot write
+even if a request is forged by hand: a write answers 403
+``insufficient_capability`` and a foreign scope answers 403 ``wrong_scope``, and
+the tool reports either code verbatim. What the token is *not* is
+method-scoped in transit: iron-proxy stamps it on any request to the engine
+host, which is why ``RELEASE.md`` keeps the read-only slot as a go-live gate
+(``FAILURE_MODES.md`` F2).
 """
 
 from __future__ import annotations
@@ -63,7 +69,15 @@ class EngineClient:
     # ---- public read surface (the whole tool) ---------------------------------
 
     def list_leads(self, limit: int = 20, status: str = "", cursor: str = "") -> dict[str, Any]:
-        """This client's leads, newest first, with the current verdict on each."""
+        """One keyset page of this client's leads, newest first.
+
+        Answers ``{account_scope, leads, next_cursor}``; ``next_cursor`` is the
+        opaque position to hand back as ``cursor``, and null on the last page.
+        ``status`` is one of pending, final, needs_human, error; a name the
+        engine does not know comes back as 400 ``invalid_query`` naming it. The
+        upstream surface also filters by ``verdict`` and ``tier``; this tool does
+        not expose them yet (bead: overlay engine settings/documents verbs).
+        """
         params: dict[str, Any] = {"limit": _clamped(limit, 1, 100)}
         if status:
             params["status"] = status
@@ -72,20 +86,32 @@ class EngineClient:
         return self._get("/v1/leads", params)
 
     def lead(self, external_id: str) -> dict[str, Any]:
-        """One lead: its snapshots, verdicts, and label if a human left one."""
+        """One lead: the view, the thresholds in force, and every model reading."""
         return self._get(f"/v1/leads/{_quote(external_id)}")
 
     def verdict(self, external_id: str) -> dict[str, Any]:
-        """The current verdict for one lead, with the stage thresholds in force."""
+        """The current verdict: P(qualified), confidence, stage, thresholds, label.
+
+        A human label wins the answer at full confidence, so this may disagree
+        with a stale model reading elsewhere on the surface, by design.
+        """
         return self._get(f"/v1/leads/{_quote(external_id)}/verdict")
 
     def review_queue(self, limit: int = 20) -> dict[str, Any]:
-        """Cases the models could not decide, waiting for a human label."""
+        """Cases the models could not decide, waiting for a human label.
+
+        The same row shape as ``leads``, filtered to status ``needs_human``.
+        """
         return self._get("/v1/review-queue", {"limit": _clamped(limit, 1, 100)})
 
-    def metrics(self) -> dict[str, Any]:
-        """Cascade counts and stage agreement for this client's scope."""
-        return self._get("/v1/metrics")
+    def metrics(self, window: str = "7d") -> dict[str, Any]:
+        """Counts, review rate, and model-vs-human agreement over ``window``.
+
+        ``window`` is 7d, 30d, 90d, or all; the answer names the window it
+        covered with its ``since`` and ``until``, so a widened window cannot be
+        read as a stale one. Any other name is the engine's 400, verbatim.
+        """
+        return self._get("/v1/metrics", {"window": window})
 
     # ---- the one HTTP helper --------------------------------------------------
 

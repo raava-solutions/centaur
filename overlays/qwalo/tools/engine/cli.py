@@ -25,7 +25,7 @@ def main(argv: list[str] | None = None) -> int:
     leads.add_argument("--status", default="", help="filter by engine status, e.g. needs_human")
     leads.add_argument("--cursor", default="", help="next-page cursor from the previous page")
 
-    lead = sub.add_parser("lead", help="one lead: snapshots, verdicts, human label")
+    lead = sub.add_parser("lead", help="one lead: the view, thresholds, model readings")
     lead.add_argument("external_id")
 
     verdict = sub.add_parser("verdict", help="the current verdict for one lead")
@@ -34,7 +34,12 @@ def main(argv: list[str] | None = None) -> int:
     queue = sub.add_parser("queue", help="cases waiting for a human label")
     queue.add_argument("--limit", type=int, default=20)
 
-    sub.add_parser("metrics", help="cascade counts and stage agreement")
+    metrics = sub.add_parser("metrics", help="counts, review rate, model-vs-human agreement")
+    metrics.add_argument(
+        "--window",
+        default="7d",
+        help="7d, 30d, 90d, or all (default 7d)",
+    )
 
     args = parser.parse_args(argv)
     client = _client()
@@ -46,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
         return _emit(client.verdict(args.external_id))
     if args.command == "queue":
         return _emit(client.review_queue(limit=args.limit))
-    return _emit(client.metrics())
+    return _emit(client.metrics(window=args.window))
 
 
 if __name__ == "__main__":

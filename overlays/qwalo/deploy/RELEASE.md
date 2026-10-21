@@ -35,11 +35,20 @@ engine reads SmarterContact through sc-connector, and the agent reads the engine
   - It stays inside the client: one app, one workspace, one namespace, one
     `account_scope` (F1, F3, F11), and never into a shared surface or a third-party
     trace sink (F12).
-  - Open question for the owners, not decided in this document and not decided by an
-    agent: does seller text **persist** in Centaur's Postgres, or live only in the turn
-    that read it? Today it persists — the control plane writes `session_messages` and
-    `session_events` with no redaction or retention knob — and no overlay setting
-    changes that. If the answer is "in-turn only", that is a platform ask.
+  - **Centaur stores none of it** (same date). The release is a read path, not a
+    place: the client's Postgres holds assignments, executions, events, and sessions —
+    the control plane's own state — and holds no lead, transcript, or snapshot. Every
+    number and message is fetched from the engine when the answer is written.
+    `e2e/run_fake_engine.py` proves the overlay carries no database driver, no write
+    statement, and no registered workflow, and that a lead read succeeds with no
+    database reachable at all.
+  - The one writer this overlay cannot police is the platform's own: `session_messages`
+    and `session_events` are written in plain text with no redaction and no retention
+    knob, so whatever the agent quotes into a reply is stored with the conversation.
+    Keeping the decision literally true means answers point at records (lead id,
+    conversation id) and the human opens them in Qwalo or SmarterContact, or the
+    platform gains persistence-off / redaction-on. Which one is the owners' call in the
+    persona pass; no values entry here decides it.
   - The sandbox prompt says nothing about seller text, and nothing in this overlay
     decides what the agent may show. That belongs to the overlay and persona pass the
     owners are running. Do not settle it from a runbook.
@@ -354,12 +363,14 @@ Ship this overlay knowing these are open. They are listed in `README.md` and
    back from the container. FAILURE_MODES F10.
 5. **The engine token is not verb-scoped, and that is Gate B.** Step 4 explains the
    exposure, including that iron-proxy injects on any method to the engine host.
-6. **Whether seller text persists in Centaur Postgres is still open with the owners.**
-   Showing it to a client's own reviewers is decided (2026-10-21); storing it is not.
-   Today the control plane persists `session_messages` and `session_events` with no
-   redaction or retention knob, so the answer today is "it persists", and changing that
-   is a platform change, not an overlay setting. Ask before step 8, not after an owner
-   does.
+6. **Centaur holds no lead or seller data. Decided 2026-10-21, and enforced only as far
+   as an overlay can reach.** The tool is a stateless read and the release registers no
+   workflow that writes, which `lead_lookup_writes_nothing_to_a_database` and
+   `overlay_ships_no_database_writer` prove. What they do not prove is that nothing is
+   stored: the control plane's transcript writer keeps `session_messages` and
+   `session_events` in plain text with no redaction or retention knob, so text the agent
+   quotes into a reply is stored with the conversation. Closing that is a platform
+   change or a persona rule, and the persona is the owners' work in progress.
 7. **CI does not cover this overlay.** The E2E gate is
    `python3 overlays/qwalo/e2e/run_fake_engine.py`, and
    `overlays/qwalo/e2e/run-on-proxmox.sh` runs it on the lab guest and commits the

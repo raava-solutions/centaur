@@ -35,7 +35,7 @@ Taken by the owner on 2026-10-20, recorded so nothing in this overlay re-decides
 | Host | `ere.qwalo.raava.dev` |
 | 1Password vault | `prod-qwalo-ere`, exists, empty until the engine issues a token |
 | Seller text | May be shown to that client's reviewers, in that client's Slack and Centaur release only. Never across clients, never into a trace sink (F7, F12) |
-| Seller text and Postgres | Open question for the owners, not decided here: persist, or in-turn only. Today the control plane stores `session_messages` and `session_events` with no redaction knob, so whatever is shown is also stored |
+| Seller text in Centaur Postgres | **Not stored.** Centaur is the read path: every answer is fetched from the engine at the moment it is given, and the client release's Postgres holds control-plane state and no lead, transcript, or snapshot (F7). Proven by `lead_lookup_writes_nothing_to_a_database` and `overlay_ships_no_database_writer` |
 | Service account `sa-prod-qwalo-ere` | A human creates it in the 1Password web UI; no script and no agent creates it |
 
 ## Layout
@@ -89,6 +89,34 @@ t-0027's work; when its `docs/v1-api.md` lands, re-read `client.py` and
 (`limit` / `cursor` / `status`), and response field names. Until then the fake engine
 speaks the shapes asserted here, not the shapes t-0027 will ship, and this overlay is
 **not** ready to deploy against production.
+
+## Lead to conversation: how the link works
+
+A reviewer asking about a lead has to be able to reach the seller thread behind it.
+The link is one field and one op, and neither is in this overlay:
+
+| Hop | Where it lives | What carries it |
+|---|---|---|
+| lead → conversation | engine `/v1` | `external_id`, with `source: "smartercontact"` marking it as a SmarterContact conversation id. A synced lead's row id is `scx:<account_scope>:<conversation_id>` (`src/v1/scope.ts`), and `externalIdColumnSql()` (`src/v1/read-db.ts`) strips the scope prefix on the way out, so what a reader gets back is the connector's own id. `lead_id` never reaches the wire. |
+| conversation → messages | sc-connector | `POST /v1/accounts/{account}/conversations.get` with `{conversationId, messageLimit, full}` → `{contact, thread, messages[], messageTotal, contextComplete, warnings}` (`packages/core/src/ops.ts`). Read op, scope `sc:read`, gate `R`, exposed over `/mcp`; seller text ships only inside `untrusted_content`. |
+
+Three gaps, filed against the repos that own them and deliberately not built here:
+
+- **`qe-5f4`** — `/v1` never names the connector `account`. `SCX_ACCOUNT` is engine env
+  (`src/sync.ts:266`) and `GET /v1/settings` answers thresholds, tiers, models, and
+  document versions, so a reader is left holding a conversation id with no way to say
+  which account to ask.
+- **`qe-0bf`** — a synced conversation is stored under its raw id, and an unscoped id
+  belongs to the home scope. ERE is the home scope, so its lead → conversation link
+  works today; a second client's synced leads would be invisible under its own
+  `account_scope` and read as "no leads".
+- **`qe-bre`** — the read-only token every client release should hold (Gate B, F2).
+  Re-files `qe-1s5`, which was created in a scratch clone and lost with it.
+
+No connector tool ships in this overlay, on instruction: today it reads the engine and
+nothing else. When it reads the connector too, the conversation id above is the join
+key, and the tenant rule does not change — one client's release reaches one connector
+account.
 
 ## Tracing (where Langfuse plugs in)
 
