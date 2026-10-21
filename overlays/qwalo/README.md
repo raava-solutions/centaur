@@ -34,8 +34,8 @@ Taken by the owner on 2026-10-20, recorded so nothing in this overlay re-decides
 | Client slug and namespace | `ere`, `centaur-ere` |
 | Host | `ere.qwalo.raava.dev` |
 | 1Password vault | `prod-qwalo-ere`, exists, empty until the engine issues a token |
-| Seller text | May be shown to that client's reviewers, in that client's Slack and Centaur release only. Never across clients, never into a trace sink (F7, F12) |
-| Seller text in Centaur Postgres | **Not stored.** Centaur is the read path: every answer is fetched from the engine at the moment it is given, and the client release's Postgres holds control-plane state and no lead, transcript, or snapshot (F7). Proven by `lead_lookup_writes_nothing_to_a_database` and `overlay_ships_no_database_writer` |
+| Seller text | The agent **summarises** it and links to it in the console; it **never quotes** it. What a reviewer reads verbatim lives in Qwalo, inside that client's own console. Never across clients, never into a trace sink (F7, F13) |
+| Seller text in Centaur Postgres | **Not stored.** Centaur is the read path: every answer is fetched from the engine at the moment it is given, and the client release's Postgres holds control-plane state and no lead, transcript, or snapshot (F7). Proven by `lead_lookup_writes_nothing_to_a_database` and `overlay_ships_no_database_writer`. The one writer left is the platform's own transcript store, and the summarise-and-link rule is what keeps seller text out of it (F13) — step 7 proves that rule is in a running sandbox rather than assuming it is |
 | Service account `sa-prod-qwalo-ere` | A human creates it in the 1Password web UI; no script and no agent creates it |
 
 ## Layout
@@ -67,7 +67,12 @@ Taken by the owner on 2026-10-20, recorded so nothing in this overlay re-decides
 | `engine lead <id>` | `GET /v1/leads/:id` |
 | `engine verdict <id>` | `GET /v1/leads/:external_id/verdict` |
 | `engine queue` | `GET /v1/review-queue` |
-| `engine metrics` | `GET /v1/metrics` |
+| `engine metrics [--window 7d\|30d\|90d\|all]` | `GET /v1/metrics` |
+
+`lead` and `verdict` answers also carry `console_url`, stamped by the tool from
+`QWALO_CONSOLE_URL` (`<base>/#/review?id=<external_id>`). It is an overlay field, not an
+engine one, and it is absent when the release configures no console — an agent that has
+to type a URL is an agent that will eventually type the wrong one.
 
 Every request carries `account_scope` from `QWALO_ACCOUNT_SCOPE` and never from the
 caller. Auth is a bearer service token; the engine's own error codes
@@ -112,6 +117,16 @@ Three gaps, filed against the repos that own them and deliberately not built her
   `account_scope` and read as "no leads".
 - **`qe-bre`** — the read-only token every client release should hold (Gate B, F2).
   Re-files `qe-1s5`, which was created in a scratch clone and lost with it.
+
+Two more, on the last hop — the reviewer arriving at *one message*:
+
+- **`qc-sv2`** — a message anchor in the console
+  (`#/review?id=<lead>&msg=<message>`, scroll and highlight, stable as the transcript
+  grows, working under the planned shareable `/leads/s/<session hash>`). Console links
+  address a lead today, so the agent names the message by position instead.
+- **`qe-4eu`** — `/v1` carries no messages and no message ids, so a reader has
+  `external_id` and `message_count` and nothing to anchor a link on. The engine decides:
+  message ids, an official positional anchor, or no message-level addressing.
 
 No connector tool ships in this overlay, on instruction: today it reads the engine and
 nothing else. When it reads the connector too, the conversation id above is the join

@@ -28,30 +28,45 @@ engine reads SmarterContact through sc-connector, and the agent reads the engine
 
 - Client slug `ere`; host `ere.qwalo.raava.dev`; vault `prod-qwalo-ere` exists and is
   empty (id `ylon56czut2scrqjb22rveszte`).
-- Seller text may be shown to that client's reviewers. A reviewer cannot judge what
-  they are approving from a count, so on 2026-10-21 the owner allowed the seller's text
-  messages inside **this client's** Slack workspace and **this client's** Centaur
-  release. That replaces the 2026-10-20 rule for this release.
-  - It stays inside the client: one app, one workspace, one namespace, one
-    `account_scope` (F1, F3, F11), and never into a shared surface or a third-party
-    trace sink (F12).
-  - **Centaur stores none of it** (same date). The release is a read path, not a
-    place: the client's Postgres holds assignments, executions, events, and sessions —
-    the control plane's own state — and holds no lead, transcript, or snapshot. Every
-    number and message is fetched from the engine when the answer is written.
-    `e2e/run_fake_engine.py` proves the overlay carries no database driver, no write
-    statement, and no registered workflow, and that a lead read succeeds with no
-    database reachable at all.
-  - The one writer this overlay cannot police is the platform's own: `session_messages`
-    and `session_events` are written in plain text with no redaction and no retention
-    knob, so whatever the agent quotes into a reply is stored with the conversation.
-    Keeping the decision literally true means answers point at records (lead id,
-    conversation id) and the human opens them in Qwalo or SmarterContact, or the
-    platform gains persistence-off / redaction-on. Which one is the owners' call in the
-    persona pass; no values entry here decides it.
-  - The sandbox prompt says nothing about seller text, and nothing in this overlay
-    decides what the agent may show. That belongs to the overlay and persona pass the
-    owners are running. Do not settle it from a runbook.
+- **What the agent says about a seller** (owner, 2026-10-21, final wording). It
+  **summarises** what the seller wrote and gives a **link** to the message in the
+  console. It **never quotes** seller text. This is one sentence narrower than the
+  earlier "the overlay may show the seller's messages": what arrives in Slack is a
+  summary plus a link, and the reviewer reads the original where it lives.
+  - Why the narrowing: the agent's reply is stored in this client's database, so a
+    quotation copies a person's words into a second place that has no retention rule.
+    A summary and a link leave the words in Qwalo. FAILURE_MODES F13.
+  - **The link is produced by the tool, not typed by the model.** The release renders
+    `QWALO_CONSOLE_URL` (default `https://qwalo.raava.dev`, one console serves every
+    scope today) into the sandbox, and the tool stamps `console_url` onto every lead
+    answer: `<base>/#/review?id=<external_id>`. Unconfigured means no link, never a
+    guessed host.
+  - **A message-level anchor does not exist yet.** Console links address a lead
+    (`public/app.js` in qwalo-console is hash-routed, and `/lead/<id>` redirects to it),
+    and message rows carry no element id. So the answer names the position it read
+    ("the third incoming message"). Console bead **`qc-sv2`** asks for the anchor;
+    engine bead **`qe-4eu`** asks `/v1` to decide what a reader could anchor on, since
+    `/v1` carries no messages and no message ids at all.
+  - **The console is Basic-auth gated** (`REVIEW_PASSWORD`): the link is for that
+    client's reviewers, not for anyone who can see the channel. Post answers in the
+    channel the client treats as private, and say so to the client (step 1).
+  - It stays inside one client: one app, one workspace, one namespace, one
+    `account_scope` (F1, F3), and never into a shared surface or a third-party trace
+    sink (F12).
+- **Centaur stores none of it** (same date). The release is a read path, not a place:
+  the client's Postgres holds assignments, executions, events, and sessions — the control
+  plane's own state — and holds no lead, transcript, or snapshot. Every number and every
+  message is fetched from the engine when the answer is written.
+  `e2e/run_fake_engine.py` proves the overlay carries no database driver, no write
+  statement, and no registered workflow, and that a lead read succeeds with no database
+  reachable at all.
+- **The last writer is closed by the persona rule, and watched by a probe.** The control
+  plane writes `session_messages` and `session_events` in plain text with no redaction
+  and no retention knob, so anything quoted into a reply would be stored with the
+  conversation. The rule in step 7 — summarise, link, never quote — is what keeps that
+  writer from defeating the decision. It is a prompt, so step 7 proves it landed in a
+  running container rather than assuming it did.
+
 - Still a human step, and it stays one: the `sa-prod-qwalo-ere` service account is
   created in the 1Password web UI. Neither this script nor an agent creates it.
 - No vault item is created until the engine issues ERE's read token. An empty vault is
@@ -283,13 +298,27 @@ kubectl -n centaur-ere get svc centaur-centaur-postgres -o name
 #    release hides it with a later entry; hiding is a runtime behaviour, so read it
 #    back from the container rather than trusting the render.
 kubectl -n centaur-ere exec deploy/centaur-centaur-api-rs -- printenv WORKFLOW_DIRS
+
+# 3. The rule that keeps seller text out of the transcript, read back from a running
+#    sandbox. Prompts reach a pod by a path this overlay does not control (step 10 item
+#    2), so "we shipped the persona" is not the same claim as "the sandbox has it".
+POD=$(kubectl -n centaur-ere get pods -l centaur-agent=true -o jsonpath='{.items[0].metadata.name}')
+kubectl -n centaur-ere exec "$POD" -- sh -c \
+  'grep -ril "never quote" ~/ ~/workspace 2>/dev/null; printenv QWALO_CONSOLE_URL'
 ```
+
+The fourth line matters more than it looks: if `grep` finds nothing, the agent in that
+pod has no instruction about seller text, and the no-persistence decision is being
+carried by nothing. Treat that as a blocked go-live, not a cosmetic gap — the release
+will still answer, still look healthy, and will quietly start storing sellers' words in
+its own database. If `QWALO_CONSOLE_URL` prints empty, the agent has no link to give and
+will reach for a quotation.
 
 Expected: the first prints a host of `centaur-centaur-postgres`, and the second finds
 that Service. If they disagree, the API has no database and every sandbox in the
 namespace will fail its first tool call.
 
-The third prints one path, ending `overlays/qwalo/workflows`. If it names the base
+The third probe prints one path, ending `overlays/qwalo/workflows`. If it names the base
 repo's `workflows` directory, the client release has registered the base tree: that
 tree contains `slack_backfill` and `slack_sync`, which write Slack conversation text
 into Postgres. Treat that as a live leak of exactly what must not be stored, stop
@@ -364,14 +393,13 @@ Ship this overlay knowing these are open. They are listed in `README.md` and
    back from the container. FAILURE_MODES F10.
 5. **The engine token is not verb-scoped, and that is Gate B.** Step 4 explains the
    exposure, including that iron-proxy injects on any method to the engine host.
-6. **Centaur holds no lead or seller data. Decided 2026-10-21, and enforced only as far
-   as an overlay can reach.** The tool is a stateless read and the release registers no
-   workflow that writes, which `lead_lookup_writes_nothing_to_a_database` and
-   `overlay_ships_no_database_writer` prove. What they do not prove is that nothing is
-   stored: the control plane's transcript writer keeps `session_messages` and
-   `session_events` in plain text with no redaction or retention knob, so text the agent
-   quotes into a reply is stored with the conversation. Closing that is a platform
-   change or a persona rule, and the persona is the owners' work in progress.
+6. **Centaur holds no lead or seller data, and the seller's words stay out of the
+   transcript by rule.** Decided 2026-10-21. The tool is a stateless read and the release
+   registers no workflow that writes, which `lead_lookup_writes_nothing_to_a_database`
+   and `overlay_ships_no_database_writer` prove. The remaining writer — the control
+   plane's plain-text `session_messages` and `session_events` — is closed by the persona
+   rule that the agent summarises and links and never quotes (F13), and step 7 proves the
+   rule is present in a running sandbox rather than assuming prompt delivery worked.
 7. **CI does not cover this overlay.** The E2E gate is
    `python3 overlays/qwalo/e2e/run_fake_engine.py`, and
    `overlays/qwalo/e2e/run-on-proxmox.sh` runs it on the lab guest and commits the

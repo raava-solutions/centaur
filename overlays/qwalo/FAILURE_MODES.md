@@ -242,16 +242,13 @@ seller text to that client's reviewers is the product (F7 control 5).
      driver, no SQL, and no workflow that could write one. F10 keeps the base repo's
      Slack backfill out of the release.
 
-   One path the overlay cannot close, stated because it is the whole difference between
-   "the overlay writes nothing" and "nothing is written": the Rust control plane writes
-   `session_messages` and `session_events` in plain text, with no redaction and no
-   retention knob, so whatever the agent quotes into its reply is stored in that
-   release's database as part of the conversation. Honouring "Centaur is only the tool
-   layer" therefore needs one of two things, and the choice is the owners' in the
-   persona pass, not this file's: answers that point at the record (lead id, conversation
-   id) and leave the words in Qwalo and SmarterContact, or a platform change that turns
-   persistence off or redaction on. No overlay setting does either, and no case here
-   claims one does.
+   The one writer an overlay cannot police is the platform's own: `session_messages` and
+   `session_events` are written in plain text, with no redaction and no retention knob,
+   so anything the agent quotes into its reply is stored with the conversation. The
+   owner closed that path on 2026-10-21 with the persona rule — the agent summarises and
+   links, and never quotes — which is F13. It works as long as the prompt reaches the
+   sandbox, which is the delivery gap in step 10 item 2, so it is a rule with a probe on
+   it (`RELEASE.md` step 7), not a rule taken on trust.
 
 6. Nothing may pull conversation text in from outside the turn uninvited. The base
    repo's workflow tree ships `slack_backfill.py` and `slack_sync.py`, which call
@@ -408,3 +405,59 @@ forbidden-forever.
 **Test.** `values_template_renders_in_the_real_chart` (no `OTEL_*` in the rendered
 release). The negative is the whole proof; there is nothing to observe at runtime
 because nothing is configured.
+
+## F13 — the agent quotes a seller into the record
+
+**Damage.** A seller's own words are copied into the client's Centaur database, in the
+agent's reply, with no retention rule and no way back. Then they are in two places: the
+engine, where they belong, and a conversation transcript, where nobody decided they
+should be.
+
+**Why it is real.** The owner's decision of 2026-10-21 is that Centaur stores no lead or
+seller data, and a reviewer still has to understand what a message means. Those two pull
+the same way until someone says how the answer is written. The agent's reply is stored:
+`session_messages` and `session_events` are written by the control plane in plain text,
+with no redaction and no retention knob (`RELEASE.md` step 10). So a single quoted
+sentence — the most natural thing in the world for a summarising assistant to write —
+defeats the decision quietly, in ordinary prose, with nothing failing.
+
+**Controls.**
+
+1. **Summarise and link; never quote.** In both instruction files, because they load by
+   different paths and either can be deployed alone: the persona
+   (`tools/personas/qwalo/PROMPT.md`) and the container prompt
+   (`services/sandbox/SYSTEM_PROMPT.md`). The persona's older permission — that "one
+   quoted line" could carry an answer — is deleted, and a case asserts it stays gone.
+2. **The link is produced, not typed.** The tool stamps `console_url` onto a lead answer
+   from `QWALO_CONSOLE_URL` (rendered per client), so the agent is never asked to
+   assemble a URL and never invents a host. When the base URL is unconfigured no link is
+   added at all.
+3. **Read answers carry no seller text to quote.** `GET /v1/*` projects message text out
+   of every answer (`F-V15`), and the E2E fake holds a real seller message with a unique
+   marker in its snapshot store and asserts that marker reaches no verb's answer.
+4. **The answer names the position it read.** Console links address a lead today
+   (`<base>/#/review?id=<external_id>`, hash-routed in `public/app.js` of
+   qwalo-console), and message rows carry no element id, so the answer says "the third
+   incoming message" and the reviewer's eye does the anchor.
+
+**Link contract, and what it still lacks.**
+
+| Piece | Today | Owner |
+|---|---|---|
+| lead link | `<console>/#/review?id=<external_id>`, and `/lead/<id>` redirects to it | shipped |
+| message anchor | none. Console bead **`qc-sv2`** asks for `?id=<lead>&msg=<message>` with scroll and highlight, stable as the transcript grows, and working under the planned shareable `/leads/s/<session hash>` shape | qwalo-console |
+| something to anchor *on* | `/v1` carries no messages and no message ids — `external_id` and `message_count` is all a reader has. Engine bead **`qe-4eu`** asks it to decide: message ids on the read surface, an official positional anchor, or no message addressing at all | qwaelo-ai-engine |
+| who may follow the link | the console is Basic-auth gated (`REVIEW_PASSWORD`), so the link is for that client's reviewers, not for a channel at large | operator, `RELEASE.md` step 1 |
+
+**The dependency this control leans on.** Both files are prompts, and prompts reach a
+Qwalo sandbox only if prompt delivery works — which is the open platform gap in
+`RELEASE.md` step 10 item 2. Until it lands, this rule ships in the overlay and does not
+run, so the control is proven *written*, not *loaded*: `persona_forbids_quoting_and_gives_the_link`
+reads the files, and step 7's probe greps the running container for the sentence. Do not
+read one as the other.
+
+**Test.** `seller_text_stays_behind_the_link` (marker in the fake's snapshot, absent from
+every answer, link present when configured and absent when not),
+`persona_forbids_quoting_and_gives_the_link` (both files carry the rule, the quotation
+permission is gone). Mutation-checked: a read projection that returns the stored
+transcript makes the marker case fail by name.

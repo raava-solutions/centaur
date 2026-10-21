@@ -173,6 +173,39 @@ READINGS = {
 # The list rows, newest first, as pageLeads() orders them.
 LEAD_ROWS = [lead_view(LEADS["sc-synthetic-0002"]), lead_view(LEADS["sc-synthetic-0001"])]
 
+# What the engine holds behind the projection: the stored transcript, with one
+# message carrying a unique marker. Nothing on the read surface may repeat it; the
+# answer points at the console instead (FAILURE_MODES F13, F-V15). The marker is
+# ordinary-looking prose on purpose: a leak should look like a normal field, not a bug.
+SELLER_MARKER = "ZEPPELIN-KITTY-4471"
+SNAPSHOTS = {
+    "sc-synthetic-0001": [
+        {"direction": "incoming", "at": "2026-10-19T21:02:00Z", "text": "hi"},
+        {
+            "direction": "incoming",
+            "at": "2026-10-20T00:00:00Z",
+            "text": (
+                "we are ready to move if the numbers work, I told my wife "
+                f"{SELLER_MARKER} this week and put the deposit aside"
+            ),
+        },
+    ],
+    "sc-synthetic-0002": [
+        {
+            "direction": "incoming",
+            "at": "2026-10-20T00:05:00Z",
+            "text": f"not sure yet, sending to {SELLER_MARKER} for a second opinion",
+        }
+    ],
+}
+
+# The count the surface reports is the count of stored messages, so the transcript and
+# the number cannot disagree.
+for _external_id, _rows in SNAPSHOTS.items():
+    LEADS[_external_id]["message_count"] = len(_rows)
+for _row in LEAD_ROWS:
+    _row["message_count"] = len(SNAPSHOTS[_row["external_id"]])
+
 REQUEST_LOG: list = []
 
 
@@ -515,6 +548,9 @@ def run_cli(argv: list[str], env: dict[str, str], tool_dir: Path = TOOL_DIR) -> 
         "QWALO_ENGINE_URL": "",
         "QWALO_ACCOUNT_SCOPE": "",
         "QWALO_ENGINE_TOKEN": "",
+        # Cleared, or a developer's shell makes every case "configured" and the
+        # unconfigured-link assertion in seller_text_stays_behind_the_link would lie.
+        "QWALO_CONSOLE_URL": "",
     }
     environ.update(env)
     # --no-cache because uv keys a path source's cached build by path, not by
@@ -1014,6 +1050,7 @@ def values_template_renders_in_the_real_chart(base: str) -> dict:
             "QWALO_ENGINE_URL", "qwalo.raava.dev"
         ),
         "engine scope reaches the sandbox": scoped("QWALO_ACCOUNT_SCOPE", '\\"ere\\"'),
+        "console link reaches the sandbox": scoped("QWALO_CONSOLE_URL", "qwalo.raava.dev"),
         "one host per client": 'host: "ere.qwalo.raava.dev"' in rendered,
         "system prompt is rendered in": prompt_line in rendered,
         "no literal slack secret": "SLACK_BOT_TOKEN" not in rendered.split("secretKeyRef")[0],
@@ -1401,6 +1438,8 @@ def check_reports_the_deploy_facts(base: str) -> dict:
             PINNED["QWALO_TOOL_REF"],
             "prod-qwalo-ere",
             "centaur",
+            # The link the agent hands a reviewer is a deploy fact, not a guess.
+            "#/review?id=",
         )
         if w not in r["stdout"]
     ]
@@ -1538,6 +1577,74 @@ def overlay_ships_no_database_writer(base: str) -> dict:
         "workflow_files": workflows,
         "detail": "no driver, no write statement, no registered workflow that could write",
     }
+
+
+@case
+def seller_text_stays_behind_the_link(base: str) -> dict:
+    """Seller text sits in the fake's snapshot and appears in no answer (F13, F-V15).
+
+    The owner's rule (2026-10-21): the agent summarises a seller message and links to
+    it; it never quotes it, because the reply is stored in the client's database. The
+    deterministic half of that is checkable, so it is checked: the marker is provably
+    inside what the fake stores, or the assertion proves nothing; no verb's answer
+    contains it; the lead answers carry the console link a human follows; and with no
+    console configured the tool adds no link rather than inventing a host.
+    """
+    env = cli_env(base)
+    env["QWALO_CONSOLE_URL"] = "https://console.test"
+    calls = {
+        "leads": ["leads", "--limit", "5"],
+        "lead": ["lead", "sc-synthetic-0001"],
+        "verdict": ["verdict", "sc-synthetic-0001"],
+        "queue": ["queue", "--limit", "5"],
+        "metrics": ["metrics", "--window", "30d"],
+    }
+    bodies = {name: run_cli(argv, env) for name, argv in calls.items()}
+    unconfigured = run_cli(["lead", "sc-synthetic-0001"], cli_env(base))
+
+    stored = SELLER_MARKER in json.dumps(SNAPSHOTS)
+    leaked = [name for name, out in bodies.items() if SELLER_MARKER in json.dumps(out["json"])]
+    lead_link = bodies["lead"]["json"].get("console_url", "")
+    return {
+        "ok": (
+            stored
+            and all(out["exit"] == 0 for out in bodies.values())
+            and not leaked
+            and lead_link == "https://console.test/#/review?id=sc-synthetic-0001"
+            and bodies["verdict"]["json"].get("console_url", "").endswith("id=sc-synthetic-0001")
+            and "console_url" not in unconfigured["json"]
+        ),
+        "marker_is_in_the_store": stored,
+        "leaked_in": leaked,
+        "console_url": lead_link,
+        "link_omitted_when_unconfigured": "console_url" not in unconfigured["json"],
+        "detail": "the answer summarises and links; the seller's words stay in the engine and the console",
+    }
+
+
+@case
+def persona_forbids_quoting_and_gives_the_link(base: str) -> dict:
+    """Both instruction files carry the rule, and neither still permits a quotation.
+
+    The persona and the container prompt are loaded by different paths and either can
+    be deployed alone, so the rule lives in both. The old persona told the agent that
+    "one quoted line" could carry the answer; if that sentence ever comes back the
+    persona rule is dead, so it is asserted away rather than trusted to stay away.
+    """
+    files = {
+        "persona": (OVERLAY_DIR / "tools" / "personas" / "qwalo" / "PROMPT.md"),
+        "system_prompt": (OVERLAY_DIR / "services" / "sandbox" / "SYSTEM_PROMPT.md"),
+    }
+    checks = {}
+    for name, path in files.items():
+        text = path.read_text().lower()
+        checks[name] = {
+            "forbids_quoting": "never quote" in text,
+            "asks_for_a_summary": "summar" in text,
+            "points_at_the_record": "console_url" in text or "console" in text,
+            "no_quoted_line_permission": "one quoted line" not in text,
+        }
+    return {"ok": all(all(v.values()) for v in checks.values()), "checks": checks}
 
 
 @case

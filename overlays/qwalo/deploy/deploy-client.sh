@@ -97,6 +97,9 @@ ENGINE_URL="${QWALO_ENGINE_URL:-https://qwalo.raava.dev}"
 # No override. The account_scope IS the client, so a stale export cannot point one
 # client's release at another client's leads (FAILURE_MODES.md F1).
 ENGINE_SCOPE="$CLIENT"
+# The console that answers the link the tool stamps onto a lead answer. One console
+# serves every scope today; a client with its own console overrides this.
+CONSOLE_URL="${QWALO_CONSOLE_URL:-https://qwalo.raava.dev}"
 IMAGE_TAG="${QWALO_IMAGE_TAG:-}"
 TOOL_REF="${QWALO_TOOL_REF:-}"
 CHART_DIR="${QWALO_CHART_DIR:-$REPO_DIR/contrib/chart}"
@@ -137,6 +140,7 @@ render() {
       -e "s|<<HOST>>|${HOST}|g" \
       -e "s|<<ENGINE_URL>>|${ENGINE_URL}|g" \
       -e "s|<<ENGINE_SCOPE>>|${ENGINE_SCOPE}|g" \
+      -e "s|<<CONSOLE_URL>>|${CONSOLE_URL}|g" \
       -e "s|<<TAG>>|${IMAGE_TAG}|g" \
       -e "s|<<TOOL_REF>>|${TOOL_REF}|g" \
       "$TEMPLATE" > "$VALUES"
@@ -206,6 +210,7 @@ if [[ "$MODE" == "check" ]]; then
   echo "tools shipped: overlays/qwalo/tools only (engine). Base tools/ tree excluded."
   echo "slack host   : https://${HOST}"
   echo "account_scope: ${ENGINE_SCOPE} (no override)"
+  echo "console link : ${CONSOLE_URL}/#/review?id=<external_id>  (stamped by the tool)"
   echo "engine token : iron-proxy inject; op://${VAULT}/QWALO_ENGINE_TOKEN/credential"
   echo "harness auth : codex api_key; op://${VAULT}/OPENAI_API_KEY/credential"
   echo "vault items  : ${VAULT_ITEMS[*]} (field credential)"

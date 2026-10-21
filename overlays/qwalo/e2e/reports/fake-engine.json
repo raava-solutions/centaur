@@ -9,7 +9,7 @@
     "fixtures": "synthetic only"
   },
   "how_it_runs": "uvx --from overlays/qwalo/tools/engine engine <verb>, the same entrypoint the sandbox CLI shim uses",
-  "passed": 47,
+  "passed": 49,
   "release_identity": {
     "image_tag": "2026.10.20-d441128",
     "tool_ref": "d441128e"
@@ -36,7 +36,7 @@
               "label": null,
               "last_error": null,
               "last_message_at": "2026-10-20T00:05:00Z",
-              "message_count": 2,
+              "message_count": 1,
               "probability_qualified": 0.51,
               "score": 41,
               "source": "v1",
@@ -54,7 +54,7 @@
               "label": null,
               "last_error": null,
               "last_message_at": "2026-10-20T00:00:00Z",
-              "message_count": 4,
+              "message_count": 2,
               "probability_qualified": 0.93,
               "score": 82,
               "source": "v1",
@@ -116,7 +116,7 @@
           "label": null,
           "last_error": null,
           "last_message_at": "2026-10-20T00:00:00Z",
-          "message_count": 4,
+          "message_count": 2,
           "probability_qualified": 0.93,
           "readings": [
             {
@@ -244,7 +244,7 @@
               "label": null,
               "last_error": null,
               "last_message_at": "2026-10-20T00:05:00Z",
-              "message_count": 2,
+              "message_count": 1,
               "probability_qualified": 0.51,
               "score": 41,
               "source": "v1",
@@ -636,7 +636,7 @@
                 "label": null,
                 "last_error": null,
                 "last_message_at": "2026-10-20T00:05:00Z",
-                "message_count": 2,
+                "message_count": 1,
                 "probability_qualified": 0.51,
                 "score": 41,
                 "source": "v1",
@@ -654,7 +654,7 @@
                 "label": null,
                 "last_error": null,
                 "last_message_at": "2026-10-20T00:00:00Z",
-                "message_count": 4,
+                "message_count": 2,
                 "probability_qualified": 0.93,
                 "score": 82,
                 "source": "v1",
@@ -999,6 +999,7 @@
     {
       "assertions": {
         "base workflow tree is hidden": true,
+        "console link reaches the sandbox": true,
         "engine scope reaches the sandbox": true,
         "engine url reaches the sandbox with its host": true,
         "harness auth is api_key": true,
@@ -1036,7 +1037,7 @@
       "tool_server_block": "enabled: true\n  repo: raava-solutions/centaur\n  ref: \"<<TOOL_REF>>\"\n  subdir: overlays/qwalo/tools\n  extraSources: []"
     },
     {
-      "accepted": "tps://ere.qwalo.raava.dev\naccount_scope: ere (no override)\nengine token : iron-proxy inject; op://prod-qwalo-ere/QWALO_ENGINE_TOKEN/credential\nharness auth : codex api_key; op://prod-qwalo-ere/OPENAI_API_KEY/credential\nvault items  : SLACK_BOT_TOKEN SLACK_SIGNING_SECRET SLACKBOT_API_KEY OPENAI_API_KEY QWALO_ENGINE_TOKEN (field credential)\nvalues       : rendered clean (184 lines, deleted on exit)\n",
+      "accepted": "raava.dev/#/review?id=<external_id>  (stamped by the tool)\nengine token : iron-proxy inject; op://prod-qwalo-ere/QWALO_ENGINE_TOKEN/credential\nharness auth : codex api_key; op://prod-qwalo-ere/OPENAI_API_KEY/credential\nvault items  : SLACK_BOT_TOKEN SLACK_SIGNING_SECRET SLACKBOT_API_KEY OPENAI_API_KEY QWALO_ENGINE_TOKEN (field credential)\nvalues       : rendered clean (190 lines, deleted on exit)\n",
       "case": "deploy_script_rejects_bad_client",
       "passed": true,
       "rejected": {
@@ -1232,6 +1233,93 @@
       "workflow_files": []
     },
     {
+      "case": "seller_text_stays_behind_the_link",
+      "console_url": "https://console.test/#/review?id=sc-synthetic-0001",
+      "detail": "the answer summarises and links; the seller's words stay in the engine and the console",
+      "leaked_in": [],
+      "link_omitted_when_unconfigured": true,
+      "marker_is_in_the_store": true,
+      "passed": true,
+      "requests": [
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/leads",
+          "query": {
+            "account_scope": "ere",
+            "limit": "5"
+          },
+          "scenario": "ok"
+        },
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/leads/sc-synthetic-0001",
+          "query": {
+            "account_scope": "ere"
+          },
+          "scenario": "ok"
+        },
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/leads/sc-synthetic-0001/verdict",
+          "query": {
+            "account_scope": "ere"
+          },
+          "scenario": "ok"
+        },
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/review-queue",
+          "query": {
+            "account_scope": "ere",
+            "limit": "5"
+          },
+          "scenario": "ok"
+        },
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/metrics",
+          "query": {
+            "account_scope": "ere",
+            "window": "30d"
+          },
+          "scenario": "ok"
+        },
+        {
+          "authorization": "Bearer <fixture-bearer>",
+          "method": "GET",
+          "path": "/v1/leads/sc-synthetic-0001",
+          "query": {
+            "account_scope": "ere"
+          },
+          "scenario": "ok"
+        }
+      ]
+    },
+    {
+      "case": "persona_forbids_quoting_and_gives_the_link",
+      "checks": {
+        "persona": {
+          "asks_for_a_summary": true,
+          "forbids_quoting": true,
+          "no_quoted_line_permission": true,
+          "points_at_the_record": true
+        },
+        "system_prompt": {
+          "asks_for_a_summary": true,
+          "forbids_quoting": true,
+          "no_quoted_line_permission": true,
+          "points_at_the_record": true
+        }
+      },
+      "passed": true,
+      "requests": []
+    },
+    {
       "case": "inert_pieces_are_declared",
       "detail": "the overlay must not claim inert pieces are live",
       "passed": true,
@@ -1246,5 +1334,5 @@
   ],
   "skipped": 0,
   "suite": "qwalo-overlay-engine-fake-engine",
-  "total": 47
+  "total": 49
 }

@@ -42,6 +42,10 @@ TOKEN_ENV = "QWALO_ENGINE_TOKEN"
 # mode, a value equal to its own name is not a credential and is not sent.
 PLACEHOLDER = TOKEN_ENV
 USER_AGENT = "centaur-qwalo-overlay/1.0"
+# Where a human goes to read the words this answer summarises. Overlay-side config,
+# not an engine field: ``console_url`` is stamped by this client, and the engine never
+# sends it. Unset means no link is added, which is better than a guessed host.
+CONSOLE_URL_ENV = "QWALO_CONSOLE_URL"
 MAX_ERROR_BYTES = 8_192
 
 
@@ -87,8 +91,13 @@ class EngineClient:
         return self._get("/v1/leads", params)
 
     def lead(self, external_id: str) -> dict[str, Any]:
-        """One lead: the view, the thresholds in force, and every model reading."""
-        return self._get(f"/v1/leads/{_quote(external_id)}")
+        """One lead: the view, the thresholds in force, and every model reading.
+
+        Carries ``console_url`` when ``QWALO_CONSOLE_URL`` is configured, so a
+        reviewer can read the seller's own words where they live instead of receiving
+        a copy of them (``FAILURE_MODES.md`` F13).
+        """
+        return _with_console_link(self._get(f"/v1/leads/{_quote(external_id)}"))
 
     def verdict(self, external_id: str) -> dict[str, Any]:
         """The current verdict: P(qualified), confidence, stage, thresholds, label.
@@ -96,7 +105,7 @@ class EngineClient:
         A human label wins the answer at full confidence, so this may disagree
         with a stale model reading elsewhere on the surface, by design.
         """
-        return self._get(f"/v1/leads/{_quote(external_id)}/verdict")
+        return _with_console_link(self._get(f"/v1/leads/{_quote(external_id)}/verdict"))
 
     def review_queue(self, limit: int = 20) -> dict[str, Any]:
         """Cases the models could not decide, waiting for a human label.
@@ -183,6 +192,36 @@ def _clamped(value: int, low: int, high: int) -> int:
     except (TypeError, ValueError):
         return low
     return max(low, min(number, high))
+
+
+def console_url(external_id: str) -> str:
+    """The console page for one lead, or an empty string when unconfigured.
+
+    The console is hash-routed: ``#/review?id=<lead id>`` is what its router resolves
+    (``public/app.js`` in qwalo-console, where ``/lead/<id>`` redirects to it), and for
+    a home-scope lead the id a ``/v1`` reader holds as ``external_id`` *is* that id.
+
+    A message-level anchor does not exist yet, so the link lands on the lead and the
+    answer names which message it summarised. Tracked as console bead ``qc-sv2`` (the
+    anchor) and engine bead ``qe-4eu`` (``/v1`` carries no message id to anchor on).
+    """
+    base = os.environ.get(CONSOLE_URL_ENV, "").strip().rstrip("/")  # noqa: TID251
+    return f"{base}/#/review?id={_quote(external_id)}" if base else ""
+
+
+def _with_console_link(body: dict[str, Any]) -> dict[str, Any]:
+    """Stamp ``console_url`` onto a successful lead answer; touch nothing else.
+
+    Keyed off the ``external_id`` the engine echoed, not the caller's argument, so the
+    link cannot out-run the record the answer is actually about. An error body has no
+    ``external_id``, and gets no link.
+    """
+    external_id = body.get("external_id") if isinstance(body, dict) else None
+    if isinstance(external_id, str) and external_id:
+        link = console_url(external_id)
+        if link:
+            body["console_url"] = link
+    return body
 
 
 def _quote(value: str) -> str:

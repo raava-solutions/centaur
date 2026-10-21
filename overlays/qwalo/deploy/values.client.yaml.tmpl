@@ -113,7 +113,7 @@ sandbox:
   # read-only (RELEASE.md step 0), so the harness runs on a plain OpenAI key.
   # The owner decides which key a client's turns are billed to.
   codexAuthMode: api_key
-  # The engine tool reads these two in the sandbox. QWALO_ACCOUNT_SCOPE is the
+  # The engine tool reads these three in the sandbox. QWALO_ACCOUNT_SCOPE is the
   # tenant boundary and the script sets it from the client name with no override.
   # There is deliberately no token here: the engine bearer is an iron-proxy
   # inject-mode secret (overlays/qwalo/tools/engine/pyproject.toml), so no
@@ -121,6 +121,12 @@ sandbox:
   extraEnv:
     QWALO_ENGINE_URL: "<<ENGINE_URL>>"
     QWALO_ACCOUNT_SCOPE: "<<ENGINE_SCOPE>>"
+    # Base URL of the review console. The tool stamps `console_url` onto every lead
+    # answer from it, so a reviewer is sent to the seller's words instead of receiving a
+    # copy of them in Slack (FAILURE_MODES F13). Console links are hash routes to a lead
+    # page today: <base>/#/review?id=<external_id>. Message-level anchors are console
+    # bead qc-sv2, so the answer names the message by position until they land.
+    QWALO_CONSOLE_URL: "<<CONSOLE_URL>>"
   resources:
     requests:
       cpu: 100m
