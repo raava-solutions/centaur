@@ -49,16 +49,20 @@ class EngineClient:
         account_scope: str | None = None,
         timeout: float = 20.0,
     ) -> None:
-        self.base_url = (base_url or os.environ.get("QWALO_ENGINE_URL", "")).rstrip("/")
-        self.token = os.environ.get(TOKEN_ENV, "") if token is None else token
-        self.account_scope = account_scope or os.environ.get("QWALO_ACCOUNT_SCOPE", "")
+        # Two pieces of configuration and one deliberate absence. The engine host and
+        # the tenant boundary are rendered per client by the deploy, so they belong in
+        # the environment. The bearer does not: iron-proxy injects it in flight (F4),
+        # so TOKEN_ENV resolves to "" inside a sandbox, and _require_config turns that
+        # into a named error rather than an unauthenticated call. Nothing here reads a
+        # credential from the environment; nothing here could.
+        self.base_url = (base_url or os.environ.get("QWALO_ENGINE_URL", "")).rstrip("/")  # noqa: TID251
+        self.token = os.environ.get(TOKEN_ENV, "") if token is None else token  # noqa: TID251
+        self.account_scope = account_scope or os.environ.get("QWALO_ACCOUNT_SCOPE", "")  # noqa: TID251
         self.timeout = timeout
 
     # ---- public read surface (the whole tool) ---------------------------------
 
-    def list_leads(
-        self, limit: int = 20, status: str = "", cursor: str = ""
-    ) -> dict[str, Any]:
+    def list_leads(self, limit: int = 20, status: str = "", cursor: str = "") -> dict[str, Any]:
         """This client's leads, newest first, with the current verdict on each."""
         params: dict[str, Any] = {"limit": _clamped(limit, 1, 100)}
         if status:
@@ -140,7 +144,18 @@ class EngineClient:
 
 
 def _clamped(value: int, low: int, high: int) -> int:
-    return max(low, min(int(value), high))
+    """Bound a page size, total on any input.
+
+    The CLI types ``--limit`` as an int, but a tool call built from a JSON body can
+    hand this a string. Every other failure path returns a named ``engine_*`` code and
+    exits 1; a traceback here would be the one place the tool breaks that promise, so
+    anything that is not a number becomes the smallest page instead.
+    """
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return low
+    return max(low, min(number, high))
 
 
 def _quote(value: str) -> str:

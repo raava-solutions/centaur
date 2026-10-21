@@ -20,11 +20,13 @@ Artifact: overlays/qwalo/e2e/reports/fake-engine.json
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -38,9 +40,7 @@ DEPLOY_DIR = OVERLAY_DIR / "deploy"
 REPORT = E2E_DIR / "reports" / "fake-engine.json"
 
 GOOD_TOKEN = "e2e-read-token"
-PLACEHOLDER = (
-    "QWALO_ENGINE_TOKEN"  # the value iron-proxy's placeholder_env seeds in the sandbox
-)
+PLACEHOLDER = "QWALO_ENGINE_TOKEN"  # the value iron-proxy's placeholder_env seeds in the sandbox
 SCOPES = ["ere"]
 
 # ---- fixtures: synthetic, no real contact data (FAILURE_MODES F7) ---------------
@@ -107,7 +107,7 @@ class FakeEngine(BaseHTTPRequestHandler):
     def _error(self, status: int, code: str, message: str) -> None:
         self._send(status, {"error": {"code": code, "message": message}})
 
-    def do_POST(self) -> None:  # noqa: N802 - the engine has no write route either
+    def do_POST(self) -> None:
         self._record("POST")
         self._error(405, "method_not_allowed", "the v1 surface has no write route here")
 
@@ -125,7 +125,7 @@ class FakeEngine(BaseHTTPRequestHandler):
         REQUEST_LOG.append(entry)
         return entry
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         self._record("GET")
         from urllib.parse import parse_qs, urlparse
 
@@ -139,9 +139,7 @@ class FakeEngine(BaseHTTPRequestHandler):
                 "SERVICE_TOKENS is not set; refusing /v1",
             )
             return
-        bearer = (
-            (self.headers.get("authorization") or "").removeprefix("Bearer ").strip()
-        )
+        bearer = (self.headers.get("authorization") or "").removeprefix("Bearer ").strip()
         if not bearer:
             self._error(401, "invalid_token", "bearer token required")
             return
@@ -166,9 +164,7 @@ class FakeEngine(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/v1/leads":
-            self._send(
-                200, {"account_scope": scope, "leads": LEAD_ROWS, "next_cursor": None}
-            )
+            self._send(200, {"account_scope": scope, "leads": LEAD_ROWS, "next_cursor": None})
         elif parsed.path == "/v1/review-queue":
             self._send(
                 200,
@@ -201,9 +197,7 @@ class FakeEngine(BaseHTTPRequestHandler):
             external_id = parsed.path.rsplit("/", 2)[1]
             verdict = LEADS.get(external_id)
             if verdict is None:
-                self._error(
-                    404, "lead_not_found", f"no verdict for {external_id} in {scope}"
-                )
+                self._error(404, "lead_not_found", f"no verdict for {external_id} in {scope}")
                 return
             self._send(200, verdict)
         else:
@@ -236,9 +230,7 @@ def run_cli(argv: list[str], env: dict[str, str], tool_dir: Path = TOOL_DIR) -> 
     return {"argv": argv, "exit": proc.returncode, "json": body}
 
 
-def cli_env(
-    base_url: str, scope: str = "ere", token: str = GOOD_TOKEN
-) -> dict[str, str]:
+def cli_env(base_url: str, scope: str = "ere", token: str = GOOD_TOKEN) -> dict[str, str]:
     return {
         "QWALO_ENGINE_URL": base_url,
         "QWALO_ACCOUNT_SCOPE": scope,
@@ -270,8 +262,7 @@ def lead_is_read(base: str) -> dict:
     out = run_cli(["lead", "sc-synthetic-0001"], cli_env(base))
     return {
         "ran": out,
-        "ok": out["exit"] == 0
-        and out["json"].get("external_id") == "sc-synthetic-0001",
+        "ok": out["exit"] == 0 and out["json"].get("external_id") == "sc-synthetic-0001",
     }
 
 
@@ -315,8 +306,7 @@ def bearer_token_is_sent(base: str) -> dict:
     seen = REQUEST_LOG[before:]
     return {
         "ran": out,
-        "ok": all(r["authorization"] == f"Bearer {GOOD_TOKEN}" for r in seen)
-        and out["exit"] == 0,
+        "ok": all(r["authorization"] == f"Bearer {GOOD_TOKEN}" for r in seen) and out["exit"] == 0,
         "detail": f"{len(seen)} request(s) carried the bearer",
     }
 
@@ -406,8 +396,7 @@ def engine_503_is_reported(base: str) -> dict:
         FakeEngine.scenario = "ok"
     return {
         "ran": out,
-        "ok": out["exit"] != 0
-        and out["json"].get("error") == "service_auth_not_configured",
+        "ok": out["exit"] != 0 and out["json"].get("error") == "service_auth_not_configured",
         "detail": "an unconfigured engine is named, never read as an empty queue",
     }
 
@@ -424,9 +413,7 @@ def engine_404_is_reported(base: str) -> dict:
 @case
 def missing_engine_url_fails_closed(base: str) -> dict:
     before = len(REQUEST_LOG)
-    out = run_cli(
-        ["metrics"], {"QWALO_ACCOUNT_SCOPE": "ere", "QWALO_ENGINE_TOKEN": GOOD_TOKEN}
-    )
+    out = run_cli(["metrics"], {"QWALO_ACCOUNT_SCOPE": "ere", "QWALO_ENGINE_TOKEN": GOOD_TOKEN})
     return {
         "ran": out,
         "ok": out["exit"] != 0
@@ -439,9 +426,7 @@ def missing_engine_url_fails_closed(base: str) -> dict:
 @case
 def missing_account_scope_fails_closed(base: str) -> dict:
     before = len(REQUEST_LOG)
-    out = run_cli(
-        ["metrics"], {"QWALO_ENGINE_URL": base, "QWALO_ENGINE_TOKEN": GOOD_TOKEN}
-    )
+    out = run_cli(["metrics"], {"QWALO_ENGINE_URL": base, "QWALO_ENGINE_TOKEN": GOOD_TOKEN})
     return {
         "ran": out,
         "ok": out["exit"] != 0
@@ -463,16 +448,13 @@ def engine_unreachable_is_reported(base: str) -> dict:
 @case
 def cli_exposes_no_write_verbs(base: str) -> dict:
     out = run_cli(["--help"], cli_env(base))
-    verbs = sorted(
-        re.findall(r"\{([a-z,]+)\}", out["json"].get("_stdout", ""))[0].split(",")
-    )
+    verbs = sorted(re.findall(r"\{([a-z,]+)\}", out["json"].get("_stdout", ""))[0].split(","))
     source = (TOOL_DIR / "client.py").read_text()
     write_calls = re.findall(
         r"method\s*=\s*[\"'](?!GET)|https?\.?(post|put|patch|delete)\(", source
     )
     return {
-        "ok": verbs == ["lead", "leads", "metrics", "queue", "verdict"]
-        and not write_calls,
+        "ok": verbs == ["lead", "leads", "metrics", "queue", "verdict"] and not write_calls,
         "verbs": verbs,
         "write_calls": write_calls,
         "detail": "the read surface is the whole surface",
@@ -501,9 +483,7 @@ def mutation_proves_the_placeholder_guard_bites(base: str) -> dict:
         copy = Path(tmp) / "engine"
         shutil.copytree(TOOL_DIR, copy)
         source = (copy / "client.py").read_text()
-        mutated = source.replace(
-            "if self.token and self.token != PLACEHOLDER:", "if self.token:"
-        )
+        mutated = source.replace("if self.token and self.token != PLACEHOLDER:", "if self.token:")
         if mutated == source:
             return {
                 "ok": False,
@@ -523,7 +503,12 @@ def mutation_proves_the_placeholder_guard_bites(base: str) -> dict:
 
 @case
 def values_template_renders_in_the_real_chart(base: str) -> dict:
-    """The values template must survive the real chart, not just a string grep."""
+    """The values the shipping script writes must survive the real chart.
+
+    Rendered through deploy-client.sh --values, not through a copy of the
+    substitution written inside this test. A test that re-implements the render can
+    pass while the deploy is broken.
+    """
     if not shutil.which("helm"):
         return {
             "ok": True,
@@ -531,26 +516,32 @@ def values_template_renders_in_the_real_chart(base: str) -> dict:
             "detail": "helm is not installed here; run this suite where it is",
         }
     repo = OVERLAY_DIR.parents[1]
+    baked = re.search(
+        r"postgresql://[^@\s]+@([A-Za-z0-9._-]+):\d+",
+        (repo / "contrib" / "scripts" / "bootstrap-k8s-secrets.sh").read_text(),
+    )
     with tempfile.TemporaryDirectory() as tmp:
         values = Path(tmp) / "values.ere.yaml"
-        text = (DEPLOY_DIR / "values.client.yaml.tmpl").read_text()
-        for token, value in {
-            "<<CLIENT>>": "ere",
-            "<<NAMESPACE>>": "centaur-ere",
-            "<<HOST>>": "ere.qwalo.raava.dev",
-            "<<ENGINE_URL>>": "https://qwalo.raava.dev",
-            "<<ENGINE_SCOPE>>": "ere",
-            "<<REGISTRY>>": "",
-            "<<TAG>>": "latest",
-            "<<TOOL_REF>>": "main",
-        }.items():
-            text = text.replace(token, value)
-        values.write_text(text)
+        rendered_values = run_script(
+            [str(DEPLOY_DIR / "deploy-client.sh"), "--values", "ere", str(values)]
+        )
+        if rendered_values["exit"] != 0:
+            return {
+                "ok": False,
+                "detail": "the shipping render failed",
+                "stderr": rendered_values["stderr"][-400:],
+            }
+        text = values.read_text()
+        left = re.findall(r"<<[A-Z_]+>>", text)
+        if left:
+            return {"ok": False, "detail": f"placeholders survived the render: {left}"}
         proc = subprocess.run(
             [
                 "helm",
                 "template",
-                "centaur-ere",
+                # The release name the deploy script uses, not the client name: the
+                # Postgres host in centaur-infra-env is built from it.
+                "centaur",
                 str(repo / "contrib" / "chart"),
                 "-f",
                 str(repo / "contrib" / "chart" / "values.yaml"),
@@ -573,14 +564,16 @@ def values_template_renders_in_the_real_chart(base: str) -> dict:
                 }
             return {"ok": False, "detail": proc.stderr[-600:]}
         rendered = proc.stdout
-    prompt_line = (
-        (OVERLAY_DIR / "services/sandbox/SYSTEM_PROMPT.md").read_text().splitlines()[0]
-    )
+    prompt_line = (OVERLAY_DIR / "services/sandbox/SYSTEM_PROMPT.md").read_text().splitlines()[0]
 
     def scoped(line_text: str, value: str) -> bool:
         lines = [line for line in rendered.splitlines() if line_text in line]
         return bool(lines) and all(value in line for line in lines)
 
+    # WORKFLOW_DIRS is emitted twice: the chart's built-in (the base repo's workflows)
+    # and this overlay's override. A container takes the last definition of a name, so
+    # order is the control and the last value is the effective one.
+    workflow_dirs = re.findall(r'name: WORKFLOW_DIRS\n\s*value: "([^"]+)"', rendered)
     want = {
         "tool dirs carry the overlay tools": "overlays/qwalo/tools" in rendered,
         "engine url reaches the sandbox with its host": scoped(
@@ -589,8 +582,25 @@ def values_template_renders_in_the_real_chart(base: str) -> dict:
         "engine scope reaches the sandbox": scoped("QWALO_ACCOUNT_SCOPE", '\\"ere\\"'),
         "one host per client": 'host: "ere.qwalo.raava.dev"' in rendered,
         "system prompt is rendered in": prompt_line in rendered,
-        "no literal slack secret": "SLACK_BOT_TOKEN"
-        not in rendered.split("secretKeyRef")[0],
+        "no literal slack secret": "SLACK_BOT_TOKEN" not in rendered.split("secretKeyRef")[0],
+        # The Service the baked DATABASE_URL points at must be the Service the chart
+        # creates, or the release boots with no database.
+        "postgres service matches the baked host": baked is not None
+        and f"name: {baked.group(1)}" in rendered,
+        "webhook source namespace is admitted": "kubernetes.io/metadata.name: kube-system"
+        in rendered,
+        "harness auth is api_key": re.search(
+            r'name: CODEX_AUTH_MODE\n\s*value: "api_key"', rendered
+        )
+        is not None,
+        "base workflow tree is hidden": len(workflow_dirs) == 2
+        and workflow_dirs[0].endswith("/workflows")
+        and "overlays" not in workflow_dirs[0]
+        and workflow_dirs[-1].endswith("/overlays/qwalo/workflows"),
+        # Spans carry prompts and tool output, which is the seller's text. A client
+        # release exports nothing: no endpoint, so nothing to route (F12).
+        "no trace sink is configured": "OTEL" not in rendered,
+        "workflow_dirs_seen": workflow_dirs,
     }
     return {
         "ok": all(want.values()),
@@ -602,9 +612,7 @@ def values_template_renders_in_the_real_chart(base: str) -> dict:
 @case
 def only_the_engine_tool_ships(base: str) -> dict:
     shipped = sorted(
-        d.name
-        for d in (OVERLAY_DIR / "tools").iterdir()
-        if d.is_dir() and d.name != "personas"
+        d.name for d in (OVERLAY_DIR / "tools").iterdir() if d.is_dir() and d.name != "personas"
     )
     return {"ok": shipped == ["engine"], "shipped_tools": shipped}
 
@@ -619,13 +627,15 @@ def the_sandbox_gets_only_the_overlay_tool_tree(base: str) -> dict:
     """
     template = (DEPLOY_DIR / "values.client.yaml.tmpl").read_text()
     block = template.split("toolServer:", 1)[1].split("\n\n", 1)[0]
-    subdirs = [
-        line.strip()
-        for line in block.splitlines()
-        if line.strip().startswith("subdir:")
-    ]
+    subdirs = [line.strip() for line in block.splitlines() if line.strip().startswith("subdir:")]
     telegram = REPO_DIR / "tools" / "comms" / "telegram" / "client.py"
-    base_can_send = telegram.exists() and "send_message" in telegram.read_text()
+    if not telegram.exists():
+        return {
+            "ok": False,
+            "detail": f"{telegram.relative_to(REPO_DIR)} is absent, so this checkout cannot prove the base tree can send. "
+            "Run from a full checkout, or with overlays/qwalo/e2e/run-on-proxmox.sh, which syncs that path.",
+        }
+    base_can_send = "send_message" in telegram.read_text()
     return {
         "ok": (
             subdirs == ["subdir: overlays/qwalo/tools"]
@@ -661,8 +671,11 @@ def run_script(argv: list[str], env: dict[str, str] | None = None) -> dict:
         check=False,
         env={**os.environ, **PINNED, **(env or {})},
     )
+    # Recorded argv is repo-relative. A worktree path is machine-specific, and an
+    # artifact that embeds one is not reproducible and not portable.
+    prefix = str(REPO_DIR) + os.sep
     return {
-        "argv": argv,
+        "argv": [str(a).replace(prefix, "") for a in argv],
         "exit": proc.returncode,
         "stdout": proc.stdout,
         "stderr": proc.stderr,
@@ -680,8 +693,7 @@ def manifest_names_only_this_client_host(base: str) -> dict:
     return {
         "ok": url == "https://ere.qwalo.raava.dev/api/webhooks/slack"
         and "chat:write.public" not in scopes
-        and manifest["settings"]["event_subscriptions"]["bot_events"]
-        == ["app_mention"],
+        and manifest["settings"]["event_subscriptions"]["bot_events"] == ["app_mention"],
         "request_url": url,
         "detail": "one app, one workspace, one host; no shared router, no unprompted posting scope",
     }
@@ -706,9 +718,7 @@ def values_template_has_no_secret_values(base: str) -> dict:
     literal_secrets = [
         line.strip()
         for line in script.splitlines()
-        if re.match(
-            r"^(export\s+)?[A-Z_]*(TOKEN|SECRET|PASSWORD)[A-Z_]*=", line.strip()
-        )
+        if re.match(r"^(export\s+)?[A-Z_]*(TOKEN|SECRET|PASSWORD)[A-Z_]*=", line.strip())
     ]
     leaked = [line for line in literal_secrets if "op read" not in line]
     # iron-proxy resolves these two itself, so the script must not hold them
@@ -726,8 +736,7 @@ def values_template_has_no_secret_values(base: str) -> dict:
         and all(ref.startswith("op://${VAULT}/") for ref in reads)
         # the existence check runs over this list, so the engine token's ref is
         # the proxy's own shape: op://$OP_VAULT/QWALO_ENGINE_TOKEN/credential
-        and "QWALO_ENGINE_TOKEN"
-        in re.search(r"VAULT_ITEMS=\(([^)]*)\)", script).group(1),
+        and "QWALO_ENGINE_TOKEN" in re.search(r"VAULT_ITEMS=\(([^)]*)\)", script).group(1),
         "offenders": offenders,
         "literal_secret_assignments": leaked,
         "exported_proxy_secrets": proxy_only,
@@ -749,9 +758,7 @@ def account_scope_cannot_be_overridden(base: str) -> dict:
 @case
 def deploy_requires_pinned_release_identity(base: str) -> dict:
     script = str(DEPLOY_DIR / "deploy-client.sh")
-    unpinned = run_script(
-        [script, "--check", "ere"], {"QWALO_IMAGE_TAG": "", "QWALO_TOOL_REF": ""}
-    )
+    unpinned = run_script([script, "--check", "ere"], {"QWALO_IMAGE_TAG": "", "QWALO_TOOL_REF": ""})
     floating_tag = run_script([script, "--check", "ere"], {"QWALO_IMAGE_TAG": "latest"})
     moving_ref = run_script([script, "--check", "ere"], {"QWALO_TOOL_REF": "main"})
     pinned = run_script([script, "--check", "ere"])
@@ -787,8 +794,18 @@ def engine_secret_ref_matches_the_proxy_lookup(base: str) -> dict:
 
 @case
 def no_double_scheme_url_anywhere(base: str) -> dict:
+    """No `https://://` typo in any source file of the overlay.
+
+    Source suffixes only: a compiled cache or a binary has no URLs to typo, and
+    reporting one as an offender hides the real list.
+    """
+    sources = {".py", ".md", ".sh", ".yaml", ".yml", ".toml", ".tmpl", ".json", ".txt", ".ts"}
     offenders = []
-    for path in sorted(p for p in OVERLAY_DIR.rglob("*") if p.is_file()):
+    for path in sorted(p for p in OVERLAY_DIR.rglob("*") if p.is_file() and p.suffix in sources):
+        # This file builds the bad string from pieces in order to look for it, so it
+        # matches itself. Nothing else in the overlay may contain it.
+        if path.name == Path(__file__).name:
+            continue
         text = path.read_text(errors="ignore")
         if "https://" + "://" in text or "http:" + "//" + "://" in text:
             offenders.append(str(path.relative_to(OVERLAY_DIR)))
@@ -797,33 +814,234 @@ def no_double_scheme_url_anywhere(base: str) -> dict:
 
 @case
 def deploy_script_gates_the_apply(base: str) -> dict:
+    """Nothing is applied until identity, vault scope, and secret refs are proven.
+
+    Located by the calls themselves, not by the words: these names also appear in
+    comments and in the usage text, and a comment cannot gate anything.
+    """
     script = (DEPLOY_DIR / "deploy-client.sh").read_text()
-    # The order that keeps a half-deploy from happening: check refs, then secrets,
-    # then namespace, then helm.
-    order = [
-        script.index("cannot read op://"),
-        script.index("bootstrap-k8s-secrets.sh"),
-        script.index("helm upgrade --install"),
-    ]
+    markers = {
+        "pinned_identity": "check_pinned\n",
+        "vault_scope": "|| check_vault_scope\n",
+        "secret_exists": '|| fail "cannot read op://',
+        "infra_secret": '"$REPO_DIR/contrib/scripts/bootstrap-k8s-secrets.sh" --namespace',
+        "apply": "helm upgrade --install",
+    }
+    positions = {}
+    for name, needle in markers.items():
+        assert needle in script, f"deploy-client.sh no longer contains {name}: {needle!r}"
+        positions[name] = script.rindex(needle)
+    sequence = ["pinned_identity", "vault_scope", "secret_exists", "infra_secret", "apply"]
+    order = [positions[name] for name in sequence]
     return {
-        "ok": order == sorted(order)
-        and "set -euo pipefail" in script
-        and "mktemp -d" in script,
-        "detail": "secret refs are proven before apply; the rendered values file is temporary",
+        "ok": order == sorted(order) and "set -euo pipefail" in script and "mktemp -d" in script,
+        "order": sequence,
+        "detail": "identity, vault scope, and secret existence are all proven before the apply",
     }
 
 
 @case
-def deploy_script_refuses_a_token_that_sees_other_vaults(base: str) -> dict:
-    """One 1Password service account per client vault, enforced before any read."""
-    script = (DEPLOY_DIR / "deploy-client.sh").read_text()
-    gate = {
-        "lists_vaults": "op vault list" in script,
-        "names_client_vaults": "prod-qwalo-${CLIENT}" in script,
-        "refuses_before_secrets": script.index("op vault list")
-        < script.index("op read"),
+def vault_scope_gate_passes_a_single_vault(base: str) -> dict:
+    """A token that sees only this client's vault is reported clean, not warned.
+
+    The first version could never report clean. Under `set -o pipefail`, a `grep -v`
+    that selects nothing exits 1, so a correctly scoped token fell into the
+    cannot-check branch and printed a warning while still exiting 0.
+    """
+    with _stub_op('[{"name":"prod-qwalo-ere"}]') as bindir:
+        r = run_script(
+            [str(DEPLOY_DIR / "deploy-client.sh"), "--vault-scope", "ere"],
+            {"PATH": f"{bindir}:{os.environ['PATH']}"},
+        )
+    return {
+        "ok": r["exit"] == 0 and "vault scope : prod-qwalo-ere only" in r["stdout"],
+        "exit": r["exit"],
+        "stdout": r["stdout"].strip(),
+        "stderr": r["stderr"].strip(),
     }
-    return {"ok": all(gate.values()), "checks": gate}
+
+
+@contextlib.contextmanager
+def _stub_op(vault_json: str | None, exit_code: int = 0):
+    """Put a fake `op` first on PATH, so a gate is tested by running it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        bindir = Path(tmp) / "bin"
+        bindir.mkdir()
+        stub = bindir / "op"
+        if vault_json is None:
+            stub.write_text(f"#!/bin/sh\nexit {exit_code}\n")
+        else:
+            stub.write_text("#!/bin/sh\ncat <<'JSON'\n" + vault_json + "\nJSON\n")
+        stub.chmod(0o755)
+        yield bindir
+
+
+@case
+def vault_scope_gate_refuses_a_second_vault(base: str) -> dict:
+    """F6 by behaviour: a token that can read another client's vault cannot deploy."""
+    with _stub_op('[{"name":"prod-qwalo-ere"},{"name":"prod-qwalo-acme"}]') as bindir:
+        r = run_script(
+            [str(DEPLOY_DIR / "deploy-client.sh"), "--vault-scope", "ere"],
+            {"PATH": f"{bindir}:{os.environ['PATH']}"},
+        )
+    combined = r["stdout"] + r["stderr"]
+    return {
+        "ok": r["exit"] != 0 and "prod-qwalo-acme" in combined,
+        "exit": r["exit"],
+        "names_the_other_vault": "prod-qwalo-acme" in combined,
+    }
+
+
+@case
+def vault_scope_gate_fails_closed_when_it_cannot_check(base: str) -> dict:
+    """If `op vault list` fails, the gate refuses. Warn-and-continue would deploy on
+    the assumption that the token is scoped, which is the whole point of F6."""
+    script = str(DEPLOY_DIR / "deploy-client.sh")
+    with _stub_op(None, exit_code=1) as bindir:
+        path = {"PATH": f"{bindir}:{os.environ['PATH']}"}
+        r = run_script([script, "--vault-scope", "ere"], path)
+        attested = run_script([script, "--vault-scope", "ere", "--vault-scope-verified"], path)
+    return {
+        "ok": r["exit"] != 0
+        and "--vault-scope-verified" in (r["stdout"] + r["stderr"])
+        and attested["exit"] == 0,
+        "exit": r["exit"],
+        "attested_exit": attested["exit"],
+    }
+
+
+@case
+def manifest_mode_writes_the_file_it_promises(base: str) -> dict:
+    """`--manifest <client> [file]` honours the optional file argument.
+
+    The argument loop shifts everything it reads, so reading `$1` after the loop is
+    always empty: the documented file form printed to stdout and wrote nothing.
+    """
+    script = str(DEPLOY_DIR / "deploy-client.sh")
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "manifest.json"
+        r = run_script([script, "--manifest", "ere", str(out)])
+        written = out.read_text() if out.exists() else ""
+    return {
+        "ok": r["exit"] == 0 and written != "" and "ere.qwalo.raava.dev" in written,
+        "exit": r["exit"],
+        "file_written": written != "",
+    }
+
+
+@case
+def release_name_keeps_the_database_host(base: str) -> dict:
+    """The Helm release stays `centaur`, or the API is born pointing at no database.
+
+    contrib/scripts/bootstrap-k8s-secrets.sh bakes DATABASE_URL with a host of
+    <release>-<chart>-postgres. Naming the release after the client invents a host
+    nobody creates, and every sandbox in that namespace fails on its first tool call.
+    """
+    bootstrap = (REPO_DIR / "contrib" / "scripts" / "bootstrap-k8s-secrets.sh").read_text()
+    baked = re.search(r"postgresql://[^@\s]+@([A-Za-z0-9._-]+):\d+", bootstrap)
+    chart_name = re.search(
+        r"^name:\s*(\S+)", (REPO_DIR / "contrib" / "chart" / "Chart.yaml").read_text(), re.M
+    )
+    r = run_script([str(DEPLOY_DIR / "deploy-client.sh"), "--check", "ere"])
+    release = re.search(r"^helm release\s*:\s*(\S+)", r["stdout"], re.M)
+    if not (baked and chart_name and release):
+        return {"ok": False, "detail": "missing baked host, chart name, or release name"}
+    derived = f"{release.group(1)}-{chart_name.group(1)}-postgres"
+    return {
+        "ok": derived == baked.group(1),
+        "baked_host": baked.group(1),
+        "derived_host": derived,
+        "helm_release": release.group(1),
+    }
+
+
+@case
+def check_reports_the_deploy_facts(base: str) -> dict:
+    """--check prints everything a human needs before a deploy, in one place."""
+    r = run_script([str(DEPLOY_DIR / "deploy-client.sh"), "--check", "ere"])
+    missing = [
+        w
+        for w in (
+            "ere.qwalo.raava.dev",
+            PINNED["QWALO_IMAGE_TAG"],
+            PINNED["QWALO_TOOL_REF"],
+            "prod-qwalo-ere",
+            "centaur",
+        )
+        if w not in r["stdout"]
+    ]
+    return {"ok": r["exit"] == 0 and not missing, "exit": r["exit"], "missing": missing}
+
+
+@case
+def values_template_names_the_webhook_source_namespace(base: str) -> dict:
+    """A client release must say where Slack's webhook comes from.
+
+    The chart is deny-by-default and admits only networkPolicy.ingressControllerNamespaces,
+    which defaults to kube-system. A tunnel or controller in any other namespace installs
+    a release that is Ready, healthy, and deaf: the event POST is dropped and nothing in
+    the cluster says why.
+    """
+    values = (DEPLOY_DIR / "values.client.yaml.tmpl").read_text()
+    block = values[values.index("networkPolicy:") :]
+    admitted = re.findall(r"^\s{4}-\s+(\S+)", block[:400], re.M)
+    return {
+        "ok": "ingressControllerNamespaces" in block and len(admitted) >= 1,
+        "admitted_namespaces": admitted,
+        "detail": "the values file states the admitted source namespace explicitly",
+    }
+
+
+@case
+def prompt_keeps_people_out_of_the_record(base: str) -> dict:
+    """The sandbox prompt today is stricter than the owner's decision, on purpose.
+
+    On 2026-10-21 the owner allowed a client's reviewers to see that client's seller
+    text. The prompt still asks for counts, ids, statuses, and reasons. It stays that
+    way until the owners settle the overlay and the persona, so this case proves the
+    current posture and nothing more: it is not evidence that the decision is
+    implemented, and relaxing it is a design change that has not been authorised.
+
+    What motivated it is still true and still enforced by the platform's shape: the
+    control plane writes session_messages and session_events with no redaction knob,
+    so whatever the agent puts in the record stays there.
+    """
+    prompt = (OVERLAY_DIR / "services" / "sandbox" / "SYSTEM_PROMPT.md").read_text().lower()
+    checks = {
+        "says_the_record_is_stored": "stored" in prompt and "database" in prompt,
+        "forbids_pasting_contact_data": "do not paste" in prompt and "email" in prompt,
+        "names_the_substitute": "id" in prompt and "counts" in prompt,
+    }
+    return {"ok": all(checks.values()), "checks": checks}
+
+
+@case
+def page_size_cannot_crash_the_tool(base: str) -> dict:
+    """`_clamped` is total, because the generic tool-call path has no argument types.
+
+    `cli.py` declares --limit as an int, but api-rs builds the call from a JSON body.
+    A limit of "many" must not surface as a traceback: F4 promises a named error or a
+    sane page, and this is the one place the tool used to be able to break that.
+    """
+    probe = (
+        "import sys;sys.path.insert(0, sys.argv[1]);"
+        "from client import _clamped;"
+        "print([_clamped(v, 1, 100) for v in ('many', '50', 1000, None, 0, -5)])"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", probe, str(TOOL_DIR)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    got = proc.stdout.strip()
+    return {
+        "ok": proc.returncode == 0 and got == "[1, 50, 100, 1, 1, 1]",
+        "exit": proc.returncode,
+        "values": got,
+        "stderr": proc.stderr.strip()[-200:],
+    }
 
 
 @case
@@ -888,8 +1106,14 @@ def main() -> int:
             "uvx --from overlays/qwalo/tools/engine engine <verb>, the same entrypoint "
             "the sandbox CLI shim uses"
         ),
+        "release_identity": {
+            # What was under proof. A render without a pinned image and tool ref is
+            # a description of a release that does not exist.
+            "image_tag": PINNED["QWALO_IMAGE_TAG"],
+            "tool_ref": PINNED["QWALO_TOOL_REF"],
+        },
         "fake_engine": {
-            "bearer": GOOD_TOKEN,
+            "bearer": "fixture constant GOOD_TOKEN in run_fake_engine.py; synthetic, never a real credential",
             "account_scopes": SCOPES,
             "fixtures": "synthetic only",
         },
@@ -899,12 +1123,24 @@ def main() -> int:
         "results": results,
     }
     REPORT.parent.mkdir(parents=True, exist_ok=True)
-    REPORT.write_text(
-        json.dumps(artifact, indent=2, sort_keys=True, default=str) + "\n"
-    )
-    print(
-        f"\n{passed}/{len(results)} passed — artifact at {REPORT.relative_to(REPO_DIR)}"
-    )
+    text = json.dumps(artifact, indent=2, sort_keys=True, default=str) + "\n"
+    # A recorded request may carry the fixture bearer the fake engine accepts. The
+    # shape belongs in the artifact; the value does not.
+    text = text.replace(GOOD_TOKEN, "<fixture-bearer>")
+    # An errno is a fact about the operating system, not about this overlay. macOS
+    # says 61 where Linux says 111; recording it makes the artifact differ per host.
+    text = re.sub(r"\[Errno \d+\]", "[Errno <os>]", text)
+    # The artifact is committed, so it carries no machine paths and no token. A run
+    # that would leak either fails here rather than in review.
+    leak = re.search(r"(/Users/|/Volumes/|/home/)[^\" ]*", text)
+    if leak:
+        print(f"FAIL  artifact carries a machine path: {leak.group(0)}", file=sys.stderr)
+        return 1
+    if GOOD_TOKEN in text:
+        print("FAIL  artifact carries the engine token value", file=sys.stderr)
+        return 1
+    REPORT.write_text(text)
+    print(f"\n{passed}/{len(results)} passed — artifact at {REPORT.relative_to(REPO_DIR)}")
     return 0 if passed == len(results) else 1
 
 

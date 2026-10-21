@@ -1,0 +1,8 @@
+# The overlay is tool-shaped: it ships a tool plugin, so it follows tools/ruff.toml.
+extend = "../../tools/ruff.toml"
+
+[lint.per-file-ignores]
+# The E2E runner is a command-line gate; its output is its interface.
+"*/e2e/*.py" = ["T201"]
+# Tool CLIs are standalone entrypoints (same exemption tools/ruff.toml makes).
+"*/cli.py" = ["TID251", "T201"]

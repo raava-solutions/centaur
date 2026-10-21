@@ -10,14 +10,17 @@
 # secretManager.existingSecretName (see deploy/RELEASE.md step 4).
 #
 # Placeholders the script substitutes: <<CLIENT>> <<NAMESPACE>> <<HOST>>
-# <<ENGINE_URL>> <<ENGINE_SCOPE>> <<REGISTRY>> <<TAG>> <<TOOL_REF>>
+# <<ENGINE_URL>> <<ENGINE_SCOPE>> <<TAG>> <<TOOL_REF>>
 #
 # <<TAG>> and <<TOOL_REF>> are release identity. The script refuses to deploy or
 # render without both, so a client's runtime never floats to whatever main or
 # latest happens to be at the moment someone runs helm.
+#
+# No registry key: no chart template reads one. apirs.yaml, slackbotv2.yaml and
+# workloads.yaml all build the image name as repository:tag, so a registry field
+# here would be a knob that looks real and does nothing.
 
 x-release: &release
-  registry: "<<REGISTRY>>"
   tag: "<<TAG>>"
   pullPolicy: IfNotPresent
 
@@ -55,6 +58,29 @@ apiRs:
   # One client per release: a small warm pool is enough for a mention-driven
   # assistant, and it keeps a cold first turn off the owner's patience.
   sandboxWarmPoolSize: 1
+  # A client release registers zero workflows.
+  #
+  # The chart builds WORKFLOW_DIRS as <repoCache.hostPath>/<toolServer.repo>/workflows
+  # with no knob, so a client release would register the base tree: eleven server-side
+  # workflows. Two of them, slack_backfill and slack_sync, call upsert_messages and
+  # write channel history into Postgres on a schedule. Reviewers being allowed to see
+  # their own client's seller text (owner decision, 2026-10-21) is about answering a
+  # question in a thread; an unattended job that copies every conversation into a
+  # database is a different act, and whether seller text should persist at all is still
+  # open with the owners. Until it is settled, nothing writes text into a client's
+  # database that no human asked for. The rest (google_calendar_sync, linear_sync,
+  # github_issue_triage, google_drive_sync) would register against secrets this vault
+  # does not hold and fail like broken integrations.
+  #
+  # This entry is emitted after every built-in, so it hides the base path: a container
+  # takes the last definition of a name. It is a hiding, not a removal, so RELEASE.md
+  # step 7 reads the value back from the running pod. If that probe ever prints the
+  # base path, treat it as a live leak, not a cosmetic diff.
+  #
+  # Path is <repoCache.hostPath>/<toolServer.repo>/overlays/qwalo/workflows. If
+  # repoCache.hostPath is ever changed from its default, this line moves with it.
+  extraEnv:
+    WORKFLOW_DIRS: /var/lib/centaur/repos/raava-solutions/centaur/overlays/qwalo/workflows
   ironProxy:
     mode: enabled
   resources:
@@ -111,6 +137,19 @@ sandbox:
 ingress:
   enabled: true
   host: "<<HOST>>"
+
+# --- How the Slack webhook reaches this release ----------------------------------
+# The chart is deny-by-default. slackbotv2 accepts a request only from a namespace
+# named here, and the chart default is kube-system. If the thing that terminates TLS
+# for this host (an ingress controller, or a Cloudflare Tunnel pod) runs in any other
+# namespace, the release deploys clean, the pods are Ready, Slack gets a 500 or a
+# timeout, and nothing in the cluster says why. Confirm the namespace with whoever
+# owns the cluster before the first event, not after.
+# Public endpoints reach a client host through a Cloudflare Tunnel, never Tailscale
+# Funnel.
+networkPolicy:
+  ingressControllerNamespaces:
+    - kube-system
 
 # --- State: one database, one namespace, one client ------------------------------
 postgres:
